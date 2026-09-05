@@ -1,0 +1,27 @@
+mutation CreateSeedData @transaction {
+  department_insertMany(data: [
+    { name: "Cardiology", headPhysicianId: "550e8400-e29b-41d4-a716-446655440000", contactPhone: "555-0101" },
+    { name: "Neurology", headPhysicianId: "550e8400-e29b-41d4-a716-446655440001", contactPhone: "555-0102" },
+    { name: "Oncology", headPhysicianId: "550e8400-e29b-41d4-a716-446655440002", contactPhone: "555-0103" }
+  ])
+  specialist_insertMany(data: [
+    { name: "Dr. Smith", specialty: "Cardiologist", departmentId: "550e8400-e29b-41d4-a716-446655440000", isOnCall: true, email: "smith@hospital.org" },
+    { name: "Dr. Jones", specialty: "Neurologist", departmentId: "550e8400-e29b-41d4-a716-446655440001", isOnCall: false, email: "jones@hospital.org" },
+    { name: "Dr. Brown", specialty: "Oncologist", departmentId: "550e8400-e29b-41d4-a716-446655440002", isOnCall: true, email: "brown@hospital.org" }
+  ])
+  patient_insertMany(data: [
+    { fullName: "Alice Doe", dateOfBirth: "1985-05-15", medicalRecordNumber: "MRN001", contactNumber: "555-1001" },
+    { fullName: "Bob Smith", dateOfBirth: "1990-08-20", medicalRecordNumber: "MRN002", contactNumber: "555-1002" },
+    { fullName: "Charlie Day", dateOfBirth: "1978-12-01", medicalRecordNumber: "MRN003", contactNumber: "555-1003" }
+  ])
+  rosterSlot_insertMany(data: [
+    { specialistId: "550e8400-e29b-41d4-a716-446655440000", startTime: "2023-10-27T08:00:00Z", endTime: "2023-10-27T16:00:00Z", locationRoom: "A101" },
+    { specialistId: "550e8400-e29b-41d4-a716-446655440001", startTime: "2023-10-27T09:00:00Z", endTime: "2023-10-27T17:00:00Z", locationRoom: "B202" },
+    { specialistId: "550e8400-e29b-41d4-a716-446655440002", startTime: "2023-10-27T10:00:00Z", endTime: "2023-10-27T18:00:00Z", locationRoom: "C303" }
+  ])
+  referral_insertMany(data: [
+    { patientId: "550e8400-e29b-41d4-a716-446655440000", specialistId: "550e8400-e29b-41d4-a716-446655440000", referringPhysicianName: "Dr. Primary", status: "Pending", urgency: "High", clinicalNotes: "Routine checkup" },
+    { patientId: "550e8400-e29b-41d4-a716-446655440001", specialistId: "550e8400-e29b-41d4-a716-446655440001", referringPhysicianName: "Dr. Primary", status: "Completed", urgency: "Medium", clinicalNotes: "Follow up" },
+    { patientId: "550e8400-e29b-41d4-a716-446655440002", specialistId: "550e8400-e29b-41d4-a716-446655440002", referringPhysicianName: "Dr. Secondary", status: "Scheduled", urgency: "Low", clinicalNotes: "Consultation" }
+  ])
+}

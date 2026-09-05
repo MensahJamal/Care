@@ -1,0 +1,38 @@
+type Department @table {
+  name: String!
+  headPhysicianId: UUID!
+  contactPhone: String
+}
+
+type Specialist @table {
+  name: String!
+  specialty: String!
+  department: Department!
+  isOnCall: Boolean!
+  email: String
+  profilePhotoUrl: String
+}
+
+type Patient @table {
+  fullName: String!
+  dateOfBirth: Date!
+  medicalRecordNumber: String!
+  contactNumber: String
+}
+
+type Referral @table {
+  patient: Patient!
+  specialist: Specialist!
+  referringPhysicianName: String!
+  status: String!
+  urgency: String!
+  clinicalNotes: String
+  appointmentDate: Timestamp
+}
+
+type RosterSlot @table {
+  specialist: Specialist!
+  startTime: Timestamp!
+  endTime: Timestamp!
+  locationRoom: String
+}

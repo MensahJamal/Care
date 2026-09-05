@@ -1,0 +1,99 @@
+mutation InsertDepartment @auth(level: USER) {
+  department_insert(data: {name: "Cardiology", headPhysicianId: "550e8400-e29b-41d4-a716-446655440000"})
+}
+
+mutation UpdateDepartment($id: UUID!, $phone: String!) @auth(level: USER) {
+  department_update(id: $id, data: {contactPhone: $phone})
+}
+
+mutation DeleteDepartment($id: UUID!) @auth(level: USER) {
+  department_delete(id: $id)
+}
+
+query GetDepartment($id: UUID!) @auth(level: PUBLIC, insecureReason: "Publicly accessible information about hospital departments.") {
+  department(id: $id) { name contactPhone headPhysicianId }
+}
+
+query ListDepartments @auth(level: PUBLIC, insecureReason: "Publicly accessible list of departments.") {
+  departments(limit: 50) { name contactPhone }
+}
+
+mutation InsertSpecialist($name: String!, $deptId: UUID!) @auth(level: USER) {
+  specialist_insert(data: {name: $name, specialty: "Surgeon", departmentId: $deptId, isOnCall: false})
+}
+
+mutation UpdateSpecialist($id: UUID!, $onCall: Boolean!) @auth(level: USER) {
+  specialist_update(id: $id, data: {isOnCall: $onCall})
+}
+
+mutation DeleteSpecialist($id: UUID!) @auth(level: USER) {
+  specialist_delete(id: $id)
+}
+
+query GetSpecialist($id: UUID!) @auth(level: PUBLIC, insecureReason: "Public access to specialist directory.") {
+  specialist(id: $id) { name specialty isOnCall }
+}
+
+query ListSpecialists @auth(level: PUBLIC, insecureReason: "Public access to specialist directory.") {
+  specialists(limit: 50) { name specialty }
+}
+
+mutation InsertPatient($name: String!, $dob: Date!, $mrn: String!) @auth(level: USER) {
+  patient_insert(data: {fullName: $name, dateOfBirth: $dob, medicalRecordNumber: $mrn})
+}
+
+mutation UpdatePatientContact($id: UUID!, $phone: String!) @auth(level: USER) {
+  patient_update(id: $id, data: {contactNumber: $phone})
+}
+
+mutation DeletePatient($id: UUID!) @auth(level: USER) {
+  patient_delete(id: $id)
+}
+
+query GetPatient($id: UUID!) @auth(level: USER) {
+  patient(id: $id) { fullName dateOfBirth medicalRecordNumber }
+}
+
+query ListPatients @auth(level: USER) {
+  patients(limit: 50) { fullName medicalRecordNumber }
+}
+
+mutation InsertReferral($patientId: UUID!, $specId: UUID!, $physician: String!) @auth(level: USER) {
+  referral_insert(data: {patientId: $patientId, specialistId: $specId, referringPhysicianName: $physician, status: "Pending", urgency: "Normal"})
+}
+
+mutation UpdateReferralStatus($id: UUID!, $status: String!) @auth(level: USER) {
+  referral_update(id: $id, data: {status: $status})
+}
+
+mutation DeleteReferral($id: UUID!) @auth(level: USER) {
+  referral_delete(id: $id)
+}
+
+query GetReferral($id: UUID!) @auth(level: USER) {
+  referral(id: $id) { status urgency clinicalNotes appointmentDate }
+}
+
+query ListReferrals @auth(level: USER) {
+  referrals(limit: 50) { status urgency referringPhysicianName }
+}
+
+mutation InsertRosterSlot($specId: UUID!, $start: Timestamp!, $end: Timestamp!) @auth(level: USER) {
+  rosterSlot_insert(data: {specialistId: $specId, startTime: $start, endTime: $end})
+}
+
+mutation UpdateRosterLocation($id: UUID!, $room: String!) @auth(level: USER) {
+  rosterSlot_update(id: $id, data: {locationRoom: $room})
+}
+
+mutation DeleteRosterSlot($id: UUID!) @auth(level: USER) {
+  rosterSlot_delete(id: $id)
+}
+
+query GetRosterSlot($id: UUID!) @auth(level: PUBLIC, insecureReason: "Public access to staff availability.") {
+  rosterSlot(id: $id) { startTime endTime locationRoom }
+}
+
+query ListRosterSlots @auth(level: PUBLIC, insecureReason: "Public access to staff availability.") {
+  rosterSlots(limit: 50) { startTime endTime locationRoom }
+}
