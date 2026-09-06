@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm --prefix HospitalReferralSystem test",
+    "lint": "npm --prefix HospitalReferralSystem run lint",
+    "typecheck": "npm --prefix HospitalReferralSystem run typecheck && npm --prefix HospitalReferralSystem/functions run build"
   },
   "keywords": [],
   "author": "",

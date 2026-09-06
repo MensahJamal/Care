@@ -4,10 +4,13 @@ import { useAuth } from '@/context/auth-context';
 import { auth, isFirebaseConfigured } from '@/lib/firebase';
 import {
     createReferral,
+    type Specialist,
     subscribeToReferrals,
     subscribeToResources,
+    subscribeToSpecialists,
     updateReferralStatus,
     updateResourceBeds,
+    updateSpecialistStatus as firestoreUpdateSpecialistStatus,
 } from '@/lib/firestore';
 
 export type ReferralStatus = 'Pending' | 'Accepted' | 'Rejected' | 'In transit';
@@ -21,6 +24,8 @@ export type Referral = {
   priority: 'Emergency' | 'Urgent' | 'Routine';
   from: string;
   to: string;
+  fromFacilityId?: string;
+  toFacilityId?: string;
   time: string;
   status: ReferralStatus;
   direction: ReferralDirection;
@@ -37,6 +42,11 @@ export type HospitalResource = {
   specialties: string[];
   lastUpdated: string;
 };
+
+// Re-export for convenience so screens only need one context import
+export type { Specialist };
+
+// ─── Demo / seed data (used when Firebase is not configured) ──────────────────
 
 const initialReferrals: Referral[] = [
   {
@@ -136,14 +146,54 @@ const initialResources: HospitalResource[] = [
   },
 ];
 
+/**
+ * Temporary demo specialist roster.
+ * In Firebase mode this is replaced by real-time data from the `specialists` collection,
+ * filtered by the signed-in user's facilityId.
+ */
+const initialSpecialists: Specialist[] = [
+  {
+    id: 's1',
+    name: 'Dr. Naa Lartey',
+    specialty: 'Cardiology',
+    departmentId: 'd1',
+    isOnCall: true,
+    status: 'On call',
+    facilityId: 'KBTH-01',
+  },
+  {
+    id: 's2',
+    name: 'Dr. Kojo Arthur',
+    specialty: 'Neurology',
+    departmentId: 'd2',
+    isOnCall: true,
+    status: 'Available',
+    facilityId: 'KBTH-01',
+  },
+  {
+    id: 's3',
+    name: 'Dr. Abena Tetteh',
+    specialty: 'Trauma Surgery',
+    departmentId: 'd3',
+    isOnCall: false,
+    status: 'In theatre',
+    facilityId: 'KBTH-01',
+  },
+];
+
+// ─── Context type ─────────────────────────────────────────────────────────────
+
 type ReferralContextValue = {
   referrals: Referral[];
   resources: HospitalResource[];
+  /** Live specialist roster for the signed-in user's facility */
+  specialists: Specialist[];
   loading: boolean;
   error: string | null;
   decideReferral: (id: string, status: 'Accepted' | 'Rejected') => Promise<void>;
   addReferral: (input: Pick<Referral, 'patient' | 'reason' | 'priority' | 'to' | 'contact'>) => Promise<boolean>;
   updateBeds: (id: string, beds: number) => Promise<void>;
+  updateSpecialistStatus: (id: string, isOnCall: boolean) => Promise<void>;
 };
 
 const ReferralContext = createContext<ReferralContextValue | null>(null);
@@ -151,34 +201,61 @@ const ReferralContext = createContext<ReferralContextValue | null>(null);
 export function ReferralProvider({ children }: PropsWithChildren) {
   const [referrals, setReferrals] = useState(initialReferrals);
   const [resources, setResources] = useState(initialResources);
-  const [loading, setLoading] = useState(isFirebaseConfigured);
+  const [specialists, setSpecialists] = useState<Specialist[]>(initialSpecialists);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
 
   useEffect(() => {
-    if (!isFirebaseConfigured || !auth || !user) return;
+    // If Firebase is not configured or no signed-in user, stay on demo data
+    if (!isFirebaseConfigured || !auth || !user) {
+      return;
+    }
 
-    let referralUnsubscribe: (() => void) | undefined;
-    let resourceUnsubscribe: (() => void) | undefined;
-    let mounted = true;
+    const isCoordinatorOrAdmin =
+      profile?.role === 'referral_coordinator' ||
+      profile?.role === 'hospital_admin' ||
+      profile?.role === 'system_admin';
+    // Admins and coordinators monitor full network; clinicians subscribe scoped to their own facility
+    const facilityScoped = isCoordinatorOrAdmin ? undefined : (profile?.facilityId ?? 'KBTH-01');
 
-    referralUnsubscribe = subscribeToReferrals(setReferrals, (nextError) => setError(nextError.message));
-    resourceUnsubscribe = subscribeToResources(setResources, (nextError) => setError(nextError.message));
-    setLoading(false);
+    const referralUnsubscribe = subscribeToReferrals(
+      facilityScoped,
+      (data) => {
+        setReferrals(data);
+        setLoading(false);
+      },
+      (nextError) => {
+        setError(nextError.message);
+        setLoading(false);
+      },
+    );
+    const resourceUnsubscribe = subscribeToResources(
+      setResources,
+      (nextError) => setError(nextError.message),
+    );
+    const targetFacilityId = profile?.facilityId ?? 'KBTH-01';
+    const specialistUnsubscribe = subscribeToSpecialists(
+      targetFacilityId,
+      setSpecialists,
+      (nextError) => setError(nextError.message),
+    );
 
     return () => {
-      mounted = false;
       referralUnsubscribe?.();
       resourceUnsubscribe?.();
+      specialistUnsubscribe?.();
     };
-  }, [user]);
+  }, [user, profile?.facilityId, profile?.role]);
 
   const value = useMemo<ReferralContextValue>(
     () => ({
       referrals,
       resources,
+      specialists,
       loading,
       error,
+
       decideReferral: async (id, status) => {
         if (isFirebaseConfigured) {
           await updateReferralStatus(id, status);
@@ -188,12 +265,19 @@ export function ReferralProvider({ children }: PropsWithChildren) {
           current.map((referral) => (referral.id === id ? { ...referral, status } : referral)),
         );
       },
+
       addReferral: async (input) => {
+        // Always use the signed-in user's facility name so multi-tenant data is correct
+        const from = profile?.facilityName ?? 'Korle Bu Teaching Hospital';
+        const fromFacilityId = profile?.facilityId ?? 'KBTH-01';
+        const uniqueSuffix = `${Date.now().toString().slice(-4)}${Math.floor(10 + Math.random() * 90)}`;
+        const patientId = `PT-${uniqueSuffix}`;
         if (isFirebaseConfigured) {
           await createReferral({
             ...input,
-            patientId: `PT-${11000 + referrals.length}`,
-            from: 'Korle Bu Teaching Hospital',
+            patientId,
+            from,
+            fromFacilityId,
             status: 'Pending',
             direction: 'sent',
           });
@@ -202,9 +286,10 @@ export function ReferralProvider({ children }: PropsWithChildren) {
         setReferrals((current) => [
           {
             ...input,
-            id: `RF-${2050 + current.length}`,
-            patientId: `PT-${11000 + current.length}`,
-            from: 'Korle Bu Teaching Hospital',
+            id: `RF-${uniqueSuffix}`,
+            patientId,
+            from,
+            fromFacilityId,
             time: 'Just now',
             status: 'Pending',
             direction: 'sent',
@@ -213,6 +298,7 @@ export function ReferralProvider({ children }: PropsWithChildren) {
         ]);
         return false;
       },
+
       updateBeds: async (id, beds) => {
         const resource = resources.find((item) => item.id === id);
         if (!resource) return;
@@ -222,19 +308,31 @@ export function ReferralProvider({ children }: PropsWithChildren) {
           return;
         }
         setResources((current) =>
-          current.map((resource) =>
-            resource.id === id
+          current.map((r) =>
+            r.id === id ? { ...r, beds: nextBeds, lastUpdated: 'Updated now' } : r,
+          ),
+        );
+      },
+
+      updateSpecialistStatus: async (id, isOnCall) => {
+        if (isFirebaseConfigured) {
+          await firestoreUpdateSpecialistStatus(id, isOnCall);
+          return;
+        }
+        setSpecialists((current) =>
+          current.map((specialist) =>
+            specialist.id === id
               ? {
-                  ...resource,
-                  beds: nextBeds,
-                  lastUpdated: 'Updated now',
+                  ...specialist,
+                  isOnCall,
+                  status: isOnCall ? 'Available' : ('Unavailable' as Specialist['status']),
                 }
-              : resource,
+              : specialist,
           ),
         );
       },
     }),
-    [error, loading, referrals, resources],
+    [error, loading, referrals, resources, specialists, profile?.facilityName, profile?.facilityId],
   );
 
   return <ReferralContext.Provider value={value}>{children}</ReferralContext.Provider>;

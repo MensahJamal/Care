@@ -10,6 +10,8 @@ import { Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native'
 
 import { AppIcon } from '@/components/ui/app-icon';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+import { AppRole, ROLE_DEFINITIONS } from '@/constants/roles';
+import { useAuth } from '@/context/auth-context';
 
 const items = [
   { name: 'overview', href: '/', label: 'Overview', ios: 'square.grid.2x2', android: 'dashboard' },
@@ -80,6 +82,13 @@ function TabButton({ children, isFocused, icon, ...props }: TabButtonProps) {
 function CustomTabList(props: TabListProps) {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const { profile } = useAuth();
+
+  const currentRole = (profile?.role as AppRole) || 'pcp';
+  const roleMeta = ROLE_DEFINITIONS[currentRole] || ROLE_DEFINITIONS.pcp;
+  const facilityName = profile?.facilityName
+    ? profile.facilityName.split(' ')[0]
+    : 'Korle Bu';
 
   return (
     <View {...props} style={[styles.tabListContainer, { borderColor: colors.border }]}>
@@ -90,10 +99,35 @@ function CustomTabList(props: TabListProps) {
           </View>
           <Text style={[styles.brandText, { color: colors.text }]}>CareLink</Text>
         </View>
+
         <View style={styles.links}>{props.children}</View>
-        <View style={styles.facility}>
-          <Text style={[styles.facilityLabel, { color: colors.textSecondary }]}>Facility</Text>
-          <Text style={[styles.facilityName, { color: colors.text }]}>Korle Bu</Text>
+
+        <View style={styles.facilityCluster}>
+          <View
+            style={[
+              styles.roleTag,
+              {
+                backgroundColor: roleMeta.badgeColor.bg,
+                borderColor: roleMeta.badgeColor.border,
+              },
+            ]}>
+            <AppIcon
+              ios={roleMeta.icon.ios}
+              android={roleMeta.icon.android}
+              color={roleMeta.badgeColor.text}
+              size={12}
+            />
+            <Text style={[styles.roleTagText, { color: roleMeta.badgeColor.text }]}>
+              {roleMeta.shortTitle}
+            </Text>
+          </View>
+
+          <View style={styles.facility}>
+            <Text style={[styles.facilityLabel, { color: colors.textSecondary }]}>Facility Node</Text>
+            <Text numberOfLines={1} style={[styles.facilityName, { color: colors.text }]}>
+              {facilityName}
+            </Text>
+          </View>
         </View>
       </View>
     </View>
@@ -140,7 +174,26 @@ const styles = StyleSheet.create({
   },
   tabLabel: { fontSize: 10, fontWeight: '600', letterSpacing: 0 },
   tabLabelActive: { fontWeight: '800' },
-  facility: { alignItems: 'flex-end', marginLeft: 'auto' },
+  facilityCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginLeft: 'auto',
+  },
+  roleTag: {
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  roleTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  facility: { alignItems: 'flex-end' },
   facilityLabel: { fontSize: 9, letterSpacing: 0 },
   facilityName: { fontSize: 12, fontWeight: '700', letterSpacing: 0 },
   pressed: { opacity: 0.65 },

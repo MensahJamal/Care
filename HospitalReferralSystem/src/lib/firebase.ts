@@ -12,6 +12,10 @@ import {
   getFirestore,
 } from 'firebase/firestore';
 
+import {
+  getFunctions,
+} from 'firebase/functions';
+
 const firebaseConfig = {
   apiKey:
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -50,4 +54,8 @@ export const auth = app
 
 export const db = app
   ? getFirestore(app)
+  : null;
+
+export const functions = app
+  ? getFunctions(app, 'us-central1')
   : null;
