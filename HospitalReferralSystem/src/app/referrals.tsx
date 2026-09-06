@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     Modal,
     Pressable,
@@ -15,15 +16,24 @@ import { Screen } from '@/components/ui/screen';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Colors, Spacing } from '@/constants/theme';
 import { Referral, ReferralDirection, useReferrals } from '@/context/referral-context';
+import { isFirebaseConfigured } from '@/lib/firebase';
+import { callVerifyOtp, getConfirmationRequestByReferral } from '@/lib/firestore';
 
 export default function ReferralsScreen() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
-  const { referrals, decideReferral } = useReferrals();
+  const { referrals, decideReferral, addReferral } = useReferrals();
   const [direction, setDirection] = useState<ReferralDirection>('incoming');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Referral | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+
+  // ── OTP acceptance state ──────────────────────────────────────────────────
+  const [otpOpen, setOtpOpen] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [pendingAccept, setPendingAccept] = useState<Referral | null>(null);
 
   const visible = useMemo(
     () =>
@@ -37,10 +47,63 @@ export default function ReferralsScreen() {
     [direction, query, referrals],
   );
 
+  /**
+   * Called from ReferralModal's action buttons.
+   * Reject is applied immediately; Accept opens the OTP verification modal.
+   */
   const decide = (status: 'Accepted' | 'Rejected') => {
     if (!selected) return;
-    decideReferral(selected.id, status);
-    setSelected({ ...selected, status });
+    if (status === 'Rejected') {
+      decideReferral(selected.id, 'Rejected');
+      setSelected({ ...selected, status: 'Rejected' });
+      return;
+    }
+    // Accept requires OTP verification
+    setPendingAccept(selected);
+    setOtpCode('');
+    setOtpError(null);
+    setOtpOpen(true);
+  };
+
+  /**
+   * Verifies the OTP entered by the clinician.
+   * In Firebase mode: looks up the confirmationRequest linked to the referral,
+   * calls verifyReferralOtp Cloud Function, then updates status directly.
+   * In demo mode: accepts any syntactically valid 6-digit code and updates local state.
+   */
+  const submitOtp = async () => {
+    if (!pendingAccept) return;
+    const trimmedCode = otpCode.trim();
+    if (!/^\d{6}$/.test(trimmedCode)) {
+      setOtpError('Enter a valid 6-digit confirmation code.');
+      return;
+    }
+    setOtpLoading(true);
+    setOtpError(null);
+    try {
+      if (isFirebaseConfigured) {
+        const request = await getConfirmationRequestByReferral(pendingAccept.id);
+        if (!request) {
+          setOtpError('No confirmation request found for this referral. OTP verification is mandatory.');
+          return;
+        }
+        const result = await callVerifyOtp(request.id, trimmedCode);
+        if (!result.verified) {
+          setOtpError('Incorrect code. Check the SMS or email sent to the referring facility.');
+          return;
+        }
+      }
+      await decideReferral(pendingAccept.id, 'Accepted');
+      // Reflect acceptance in the open ReferralModal if it's the same referral
+      setSelected((prev) => (prev?.id === pendingAccept.id ? { ...prev, status: 'Accepted' } : prev));
+      setOtpOpen(false);
+      setPendingAccept(null);
+      setOtpCode('');
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'Verification failed. Please try again.');
+    } finally {
+      setOtpLoading(false);
+    }
   };
 
   return (
@@ -172,10 +235,27 @@ export default function ReferralsScreen() {
         onClose={() => setSelected(null)}
         onDecide={decide}
       />
-      <ComposeModal open={composeOpen} onClose={() => setComposeOpen(false)} />
+      <ComposeModal open={composeOpen} onClose={() => setComposeOpen(false)} addReferral={addReferral} referralCount={referrals.length} />
+      <OtpModal
+        open={otpOpen}
+        referral={pendingAccept}
+        code={otpCode}
+        onChangeCode={setOtpCode}
+        error={otpError}
+        loading={otpLoading}
+        onSubmit={submitOtp}
+        onClose={() => {
+          setOtpOpen(false);
+          setPendingAccept(null);
+          setOtpCode('');
+          setOtpError(null);
+        }}
+      />
     </>
   );
 }
+
+// ─── Referral detail modal ────────────────────────────────────────────────────
 
 function ReferralModal({
   referral,
@@ -237,8 +317,8 @@ function ReferralModal({
                   { backgroundColor: colors.primary, borderColor: colors.primary },
                   pressed && styles.pressed,
                 ]}>
-                <AppIcon ios="checkmark" android="check" color={colors.white} size={17} />
-                <Text style={styles.acceptText}>Accept referral</Text>
+                <AppIcon ios="checkmark.shield" android="verified_user" color={colors.white} size={17} />
+                <Text style={styles.acceptText}>Accept & Verify</Text>
               </Pressable>
             </View>
           ) : null}
@@ -247,6 +327,126 @@ function ReferralModal({
     </Modal>
   );
 }
+
+// ─── OTP verification modal ───────────────────────────────────────────────────
+
+function OtpModal({
+  open,
+  referral,
+  code,
+  onChangeCode,
+  error,
+  loading,
+  onSubmit,
+  onClose,
+}: {
+  open: boolean;
+  referral: Referral | null;
+  code: string;
+  onChangeCode: (code: string) => void;
+  error: string | null;
+  loading: boolean;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  const scheme = useColorScheme();
+  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  if (!referral) return null;
+
+  return (
+    <Modal transparent visible={open} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.modal, { backgroundColor: colors.surface }]}>
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={[styles.modalEyebrow, { color: colors.textSecondary }]}>OTP VERIFICATION</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Confirm acceptance</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Close OTP modal"
+              onPress={onClose}
+              style={[styles.closeButton, { backgroundColor: colors.backgroundElement }]}>
+              <AppIcon ios="xmark" android="close" color={colors.text} size={17} />
+            </Pressable>
+          </View>
+
+          {/* Referral summary */}
+          <View style={[styles.detailPanel, { backgroundColor: colors.background }]}>
+            <Detail label="Patient" value={referral.patient} />
+            <Detail label="Priority" value={referral.priority} />
+            <Detail label="Referring facility" value={referral.from} />
+          </View>
+
+          {/* Instruction banner */}
+          <View style={[styles.otpInfo, { backgroundColor: colors.primarySoft, borderColor: colors.primary }]}>
+            <AppIcon
+              ios="envelope.badge.shield.half.filled"
+              android="mark_email_read"
+              color={colors.primary}
+              size={17}
+            />
+            <Text style={[styles.otpInfoText, { color: colors.primary }]}>
+              {isFirebaseConfigured
+                ? 'A 6-digit confirmation code was sent to the referring facility. Enter it below to confirm acceptance.'
+                : 'Demo mode — enter any 6 digits to simulate OTP verification.'}
+            </Text>
+          </View>
+
+          {/* Error alert */}
+          {error ? (
+            <View style={[styles.otpError, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }]}>
+              <AppIcon ios="exclamationmark.circle.fill" android="error" color={colors.danger} size={16} />
+              <Text style={[styles.otpErrorText, { color: colors.danger }]}>{error}</Text>
+            </View>
+          ) : null}
+
+          {/* Code input */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Confirmation code</Text>
+            <TextInput
+              value={code}
+              onChangeText={onChangeCode}
+              placeholder="000000"
+              placeholderTextColor={colors.textSecondary}
+              keyboardType="number-pad"
+              maxLength={6}
+              style={[
+                styles.formInput,
+                styles.otpInput,
+                {
+                  color: colors.text,
+                  backgroundColor: colors.background,
+                  borderColor: error ? colors.danger : colors.border,
+                },
+              ]}
+            />
+          </View>
+
+          {/* Submit */}
+          <Pressable
+            disabled={loading}
+            onPress={onSubmit}
+            style={({ pressed }) => [
+              styles.submitButton,
+              { backgroundColor: colors.primary },
+              (pressed || loading) && styles.pressed,
+            ]}>
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <>
+                <AppIcon ios="checkmark.shield.fill" android="verified_user" color="#FFFFFF" size={17} />
+                <Text style={styles.acceptText}>Verify & Accept Referral</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Shared detail row ────────────────────────────────────────────────────────
 
 function Detail({ label, value }: { label: string; value: string }) {
   const scheme = useColorScheme();
@@ -259,6 +459,8 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ─── Compose new referral modal ───────────────────────────────────────────────
+
 const hospitalCategories = ['General', 'Specialist', 'Emergency', 'Maternal & Child'] as const;
 type HospitalCategory = (typeof hospitalCategories)[number];
 
@@ -269,10 +471,19 @@ const hospitalsByCategory: Record<HospitalCategory, string[]> = {
   'Maternal & Child': ['Princess Marie Louise Hospital', 'Ridge Hospital'],
 };
 
-function ComposeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function ComposeModal({
+  open,
+  onClose,
+  addReferral,
+  referralCount,
+}: {
+  open: boolean;
+  onClose: () => void;
+  addReferral: (input: Pick<Referral, 'patient' | 'reason' | 'priority' | 'to' | 'contact'>) => Promise<boolean>;
+  referralCount: number;
+}) {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
-  const { addReferral } = useReferrals();
   const [patient, setPatient] = useState('');
   const [reason, setReason] = useState('');
   const [hospital, setHospital] = useState('Ridge Hospital');
@@ -341,7 +552,7 @@ function ComposeModal({ open, onClose }: { open: boolean; onClose: () => void })
               </Pressable>
             </View>
             {hospitalMenuOpen ? (
-              <View style={[styles.hospitalMenu, { backgroundColor: colors.background, borderColor: colors.border }]}> 
+              <View style={[styles.hospitalMenu, { backgroundColor: colors.background, borderColor: colors.border }]}>
                 <View style={styles.categoryRow}>
                   {hospitalCategories.map((category) => (
                     <Pressable
@@ -549,6 +760,32 @@ const styles = StyleSheet.create({
   },
   decisionText: { fontSize: 12, fontWeight: '800' },
   acceptText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  // OTP modal
+  otpInfo: {
+    borderRadius: 7,
+    borderWidth: 1,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  otpInfoText: { flex: 1, fontSize: 11, lineHeight: 16, fontWeight: '600' },
+  otpError: {
+    borderRadius: 7,
+    borderWidth: 1,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  otpErrorText: { flex: 1, fontSize: 11, lineHeight: 15, fontWeight: '600' },
+  otpInput: {
+    textAlign: 'center',
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: 8,
+  },
+  // Shared form styles
   formGroup: { gap: 6 },
   formLabel: { fontSize: 10, fontWeight: '700' },
   formInput: { height: 42, borderRadius: 6, borderWidth: 1, paddingHorizontal: 12, fontSize: 12 },

@@ -6,38 +6,182 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdministrator() {
-      return signedIn()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'administrator';
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function userRole() {
+      return getUserData().role;
+    }
+
+    function isSystemAdmin() {
+      return signedIn() && (userRole() == 'system_admin');
+    }
+
+    function isHospitalAdmin() {
+      return signedIn() && (userRole() == 'hospital_admin' || userRole() == 'administrator' || isSystemAdmin());
+    }
+
+    function isCoordinator() {
+      return signedIn() && (userRole() == 'referral_coordinator' || isHospitalAdmin());
+    }
+
+    function isSpecialist() {
+      return signedIn() && (userRole() == 'specialist' || isHospitalAdmin());
+    }
+
+    function isPcp() {
+      return signedIn() && (userRole() == 'pcp' || userRole() == 'staff' || isCoordinator());
+    }
+
+    function isLabTech() {
+      return signedIn() && (userRole() == 'lab_technician' || isSystemAdmin());
+    }
+
+    function isPharmacist() {
+      return signedIn() && (userRole() == 'pharmacist' || isSystemAdmin());
+    }
+
+    function isClinicalStaff() {
+      return isPcp() || isSpecialist() || isCoordinator() || isLabTech() || isPharmacist();
+    }
+
+    function ownFacility(facilityId) {
+      return signedIn() && getUserData().facilityId == facilityId;
+    }
+
+    function userFacilityId() {
+      return getUserData().facilityId;
+    }
+
+    // ── Users & RBAC Directory ────────────────────────────────────────────────
     match /users/{userId} {
-      allow read: if signedIn() && request.auth.uid == userId;
-      allow create: if signedIn() && request.auth.uid == userId;
-      allow update: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.facilityId == resource.data.facilityId;
-      allow delete: if isAdministrator();
+      allow read: if signedIn() && (request.auth.uid == userId || isHospitalAdmin());
+      allow create: if signedIn() && request.auth.uid == userId && (
+        request.resource.data.role == 'patient' || isHospitalAdmin()
+      );
+      allow update: if signedIn() && (
+        (
+          request.auth.uid == userId &&
+          // Non-admins cannot change role, facilityId, or facilityName
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.facilityId == resource.data.facilityId &&
+          request.resource.data.facilityName == resource.data.facilityName
+        ) ||
+        isHospitalAdmin()
+      );
+      allow delete: if isSystemAdmin();
     }
 
+    // ── Referrals (Inter-Hospital Transfers) ──────────────────────────────────
+    // Readable by: admins/coordinators (full network), clinical staff at sender/receiver
+    // facility, and the patient whose referral it is.
     match /referrals/{referralId} {
-      allow read, update: if signedIn();
-      allow create: if signedIn() && request.resource.data.createdByUid == request.auth.uid;
-      allow delete: if isAdministrator();
+      allow read: if signedIn() && (
+        isCoordinator() ||
+        isHospitalAdmin() ||
+        (isClinicalStaff() && (
+          userFacilityId() == resource.data.fromFacilityId ||
+          userFacilityId() == resource.data.toFacilityId
+        )) ||
+        (userRole() == 'patient' && resource.data.createdByUid == request.auth.uid)
+      );
+      allow create: if signedIn() && (
+        isPcp() || isCoordinator() || isSpecialist() || isHospitalAdmin()
+      );
+      allow update: if signedIn() && (
+        isSpecialist() || isCoordinator() || isHospitalAdmin() || isSystemAdmin()
+      );
+      allow delete: if isHospitalAdmin();
     }
 
+    // ── Hospital resources (bed counts, capacity) ─────────────────────────────
+    // Intentionally cross-facility visible: clinicians need to see network capacity
+    // to decide where to transfer patients.
     match /resources/{resourceId} {
-      allow read, update: if signedIn();
-      allow create, delete: if isAdministrator();
+      allow read: if signedIn();
+      allow update: if signedIn() && (
+        isHospitalAdmin() || isCoordinator() || isSpecialist()
+      );
+      allow create, delete: if isHospitalAdmin();
     }
 
+    // ── Confirmation requests (OTP Verification) ──────────────────────────────
     match /confirmationRequests/{requestId} {
+      allow read: if signedIn() && (
+        resource.data.createdByUid == request.auth.uid || isCoordinator() || isHospitalAdmin()
+      );
+      allow create: if signedIn() && (
+        isCoordinator() || isPcp() || isSpecialist() || isHospitalAdmin()
+      );
+      allow update: if false; // Processed via Cloud Functions only
+      allow delete: if isHospitalAdmin();
+    }
+
+    // ── Specialists & On-Call Rosters ─────────────────────────────────────────
+    // Specialists can only update their own record (on-call toggle), not others'.
+    match /specialists/{specialistId} {
       allow read: if signedIn();
-      allow create: if signedIn()
-        && request.resource.data.createdByUid == request.auth.uid
-        && get(/databases/$(database)/documents/referrals/$(request.resource.data.referralId)).data.createdByUid == request.auth.uid;
-      allow delete: if isAdministrator();
+      allow create, delete: if isHospitalAdmin();
+      allow update: if isHospitalAdmin() ||
+        (isSpecialist() && resource.data.facilityId == userFacilityId() && request.auth.uid == specialistId);
+    }
+
+    // ── Departments ───────────────────────────────────────────────────────────
+    match /departments/{departmentId} {
+      allow read: if signedIn();
+      allow write: if isHospitalAdmin();
+    }
+
+    // ── Patients & Clinical Records ───────────────────────────────────────────
+    match /patients/{patientId} {
+      allow read: if signedIn() && (
+        ownFacility(resource.data.facilityId) || isHospitalAdmin() || request.auth.uid == patientId
+      );
+      allow create: if signedIn() && (
+        isPcp() || isCoordinator() || isHospitalAdmin()
+      );
+      allow update: if signedIn() && (
+        ownFacility(resource.data.facilityId) || isHospitalAdmin()
+      );
+      allow delete: if isHospitalAdmin();
+    }
+
+    // ── Diagnostic Orders & Lab Panels ────────────────────────────────────────
+    // PHI: reads scoped to own facility clinical staff or the patient themselves.
+    match /labOrders/{orderId} {
+      allow read: if signedIn() && (
+        isHospitalAdmin() ||
+        isLabTech() ||
+        (isClinicalStaff() && userFacilityId() == resource.data.facilityId) ||
+        (userRole() == 'patient' && resource.data.patientId == request.auth.uid)
+      );
+      allow create: if signedIn() && (isPcp() || isSpecialist() || isCoordinator() || isHospitalAdmin());
+      allow update: if signedIn() && (isLabTech() || isSpecialist() || isHospitalAdmin());
+      allow delete: if isHospitalAdmin();
+    }
+
+    // ── Prescriptions & Pharmacy Formulary ────────────────────────────────────
+    // PHI: reads scoped to own facility clinical staff or the patient themselves.
+    match /prescriptions/{prescriptionId} {
+      allow read: if signedIn() && (
+        isHospitalAdmin() ||
+        isPharmacist() ||
+        (isClinicalStaff() && userFacilityId() == resource.data.facilityId) ||
+        (userRole() == 'patient' && resource.data.patientId == request.auth.uid)
+      );
+      allow create: if signedIn() && (isPcp() || isSpecialist() || isHospitalAdmin());
+      allow update: if signedIn() && (isPharmacist() || isSpecialist() || isHospitalAdmin());
+      allow delete: if isHospitalAdmin();
+    }
+
+    // ── Roster slots ──────────────────────────────────────────────────────────
+    match /rosterSlots/{slotId} {
+      allow read: if signedIn();
+      allow create, update: if isHospitalAdmin() || ownFacility(
+        get(/databases/$(database)/documents/specialists/$(resource.data.specialistId)).data.facilityId
+      );
+      allow delete: if isHospitalAdmin();
     }
   }
 }

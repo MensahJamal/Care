@@ -6,26 +6,26 @@ import { Screen } from '@/components/ui/screen';
 import { Colors, Spacing } from '@/constants/theme';
 import { HospitalResource, useReferrals } from '@/context/referral-context';
 
-const specialistRoster = [
-  { name: 'Dr. Naa Lartey', specialty: 'Cardiology', status: 'On call' },
-  { name: 'Dr. Kojo Arthur', specialty: 'Neurology', status: 'Available' },
-  { name: 'Dr. Abena Tetteh', specialty: 'Trauma Surgery', status: 'In theatre' },
-];
+
 
 export default function ResourcesScreen() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
-  const { resources, updateBeds } = useReferrals();
+  const { resources, updateBeds, specialists, updateSpecialistStatus } = useReferrals();
   const [showAvailableOnly, setShowAvailableOnly] = useState(false);
-  const [specialistAvailability, setSpecialistAvailability] = useState<Record<string, boolean>>({
-    'Dr. Naa Lartey': true,
-    'Dr. Kojo Arthur': true,
-    'Dr. Abena Tetteh': false,
-  });
 
-  const ownFacility = resources[0];
+  const ownFacility = resources[0] ?? {
+    id: 'kbth',
+    name: 'Korle Bu Teaching Hospital',
+    distance: 'Your facility',
+    beds: 0,
+    totalBeds: 0,
+    specialists: 0,
+    specialties: [],
+    lastUpdated: 'Live',
+  };
   const visible = showAvailableOnly
-    ? resources.filter((resource) => resource.beds >= 10)
+    ? resources.filter((resource: HospitalResource) => resource.beds >= 10)
     : resources;
 
   return (
@@ -50,13 +50,13 @@ export default function ResourcesScreen() {
             <Pressable
               accessibilityLabel="Decrease available beds"
               onPress={() => updateBeds(ownFacility.id, ownFacility.beds - 1)}
-              style={({ pressed }) => [styles.stepperButton, pressed && styles.pressed]}>
+              style={({ pressed }: { pressed: boolean }) => [styles.stepperButton, pressed && styles.pressed]}>
               <Text style={styles.stepperSymbol}>−</Text>
             </Pressable>
             <Pressable
               accessibilityLabel="Increase available beds"
               onPress={() => updateBeds(ownFacility.id, ownFacility.beds + 1)}
-              style={({ pressed }) => [styles.stepperButton, pressed && styles.pressed]}>
+              style={({ pressed }: { pressed: boolean }) => [styles.stepperButton, pressed && styles.pressed]}>
               <Text style={styles.stepperSymbol}>+</Text>
             </Pressable>
           </View>
@@ -87,7 +87,7 @@ export default function ResourcesScreen() {
           </View>
         </View>
         <View style={styles.hospitalList}>
-          {visible.map((hospital) => (
+          {visible.map((hospital: HospitalResource) => (
             <HospitalRow key={hospital.id} hospital={hospital} />
           ))}
         </View>
@@ -105,56 +105,54 @@ export default function ResourcesScreen() {
             styles.specialistList,
             { backgroundColor: colors.surface, borderColor: colors.border },
           ]}>
-          {specialistRoster.map((specialist, index) => {
-            const available = specialistAvailability[specialist.name];
-            return (
-              <View
-                key={specialist.name}
-                style={[
-                  styles.specialistRow,
-                  index < specialistRoster.length - 1 && {
-                    borderBottomWidth: 1,
-                    borderBottomColor: colors.border,
-                  },
-                ]}>
-                <View style={[styles.avatar, { backgroundColor: colors.infoSoft }]}>
-                  <Text style={[styles.avatarText, { color: colors.info }]}>
-                    {specialist.name
-                      .split(' ')
-                      .slice(1)
-                      .map((part) => part[0])
-                      .join('')}
-                  </Text>
-                </View>
-                <View style={styles.specialistMain}>
-                  <Text style={[styles.specialistName, { color: colors.text }]}>
-                    {specialist.name}
-                  </Text>
-                  <Text style={[styles.specialistMeta, { color: colors.textSecondary }]}>
-                    {specialist.specialty} · {available ? specialist.status : 'Unavailable'}
-                  </Text>
-                </View>
-                <Switch
-                  value={available}
-                  onValueChange={(value) =>
-                    setSpecialistAvailability((current) => ({
-                      ...current,
-                      [specialist.name]: value,
-                    }))
-                  }
-                  trackColor={{ false: colors.backgroundElement, true: colors.primary }}
-                  thumbColor={colors.white}
-                />
+          {specialists.length === 0 ? (
+            <View style={styles.specialistEmpty}>
+              <Text style={[styles.specialistEmptyText, { color: colors.textSecondary }]}>
+                No specialists found for this facility.
+              </Text>
+            </View>
+          ) : specialists.map((specialist, index) => (
+            <View
+              key={specialist.id}
+              style={[
+                styles.specialistRow,
+                index < specialists.length - 1 && {
+                  borderBottomWidth: 1,
+                  borderBottomColor: colors.border,
+                },
+              ]}>
+              <View style={[styles.avatar, { backgroundColor: colors.infoSoft }]}>
+                <Text style={[styles.avatarText, { color: colors.info }]}>
+                  {specialist.name
+                    .split(' ')
+                    .slice(1)
+                    .map((part) => part[0])
+                    .join('')}
+                </Text>
               </View>
-            );
-          })}
+              <View style={styles.specialistMain}>
+                <Text style={[styles.specialistName, { color: colors.text }]}>
+                  {specialist.name}
+                </Text>
+                <Text style={[styles.specialistMeta, { color: colors.textSecondary }]}>
+                  {specialist.specialty} · {specialist.isOnCall ? specialist.status : 'Unavailable'}
+                </Text>
+              </View>
+              <Switch
+                value={specialist.isOnCall}
+                onValueChange={(value) => updateSpecialistStatus(specialist.id, value)}
+                trackColor={{ false: colors.backgroundElement, true: colors.primary }}
+                thumbColor={colors.white}
+              />
+            </View>
+          ))}
         </View>
       </View>
     </Screen>
   );
 }
 
-function HospitalRow({ hospital }: { hospital: HospitalResource }) {
+function HospitalRow({ hospital }: { hospital: HospitalResource; key?: string }) {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
   const percent = Math.max(3, Math.round((hospital.beds / hospital.totalBeds) * 100));
@@ -272,5 +270,7 @@ const styles = StyleSheet.create({
   specialistMain: { flex: 1, gap: 3 },
   specialistName: { fontSize: 12, fontWeight: '800' },
   specialistMeta: { fontSize: 9 },
+  specialistEmpty: { minHeight: 60, alignItems: 'center', justifyContent: 'center', padding: 16 },
+  specialistEmptyText: { fontSize: 11 },
   pressed: { opacity: 0.65 },
 });

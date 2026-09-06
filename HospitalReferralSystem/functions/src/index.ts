@@ -1,10 +1,11 @@
 import sgMail from '@sendgrid/mail';
 import { initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import twilio from 'twilio';
 
 initializeApp();
@@ -15,9 +16,18 @@ const twilioAuthToken = defineSecret('TWILIO_AUTH_TOKEN');
 const twilioFromPhone = defineSecret('TWILIO_FROM_PHONE');
 const sendgridApiKey = defineSecret('SENDGRID_API_KEY');
 const sendgridFromEmail = defineSecret('SENDGRID_FROM_EMAIL');
+const otpSecret = defineSecret('OTP_SECRET');
+
+function getOtpSecretKey(): string {
+  try {
+    return otpSecret.value();
+  } catch {
+    return process.env.OTP_SECRET || 'carelink-secure-otp-salt-secret-production-key-v1';
+  }
+}
 
 function hashOtp(code: string) {
-  return createHash('sha256').update(code).digest('hex');
+  return createHmac('sha256', getOtpSecretKey()).update(code).digest('hex');
 }
 
 function matchesOtp(code: string, expectedHash: string) {
@@ -42,7 +52,7 @@ function formatReferralMessage(referralId: string, referral: FirebaseFirestore.D
 export const deliverConfirmationPrompt = onDocumentCreated(
   {
     document: 'confirmationRequests/{requestId}',
-    secrets: [twilioAccountSid, twilioAuthToken, twilioFromPhone, sendgridApiKey, sendgridFromEmail],
+    secrets: [twilioAccountSid, twilioAuthToken, twilioFromPhone, sendgridApiKey, sendgridFromEmail, otpSecret],
     region: 'us-central1',
   },
   async (event) => {
@@ -112,6 +122,17 @@ export const confirmReferral = onCall({ region: 'us-central1' }, async (request)
     throw new HttpsError('unauthenticated', 'You must be signed in to confirm a referral.');
   }
 
+  // SEC-11: Validate caller role to ensure patients or unauthorized users cannot confirm/reject
+  const callerDoc = await db.collection('users').doc(request.auth.uid).get();
+  if (!callerDoc.exists) {
+    throw new HttpsError('permission-denied', 'Caller user profile not found.');
+  }
+  const callerRole = callerDoc.data()?.role;
+  const authorizedRoles = ['specialist', 'referral_coordinator', 'hospital_admin', 'administrator', 'system_admin'];
+  if (!authorizedRoles.includes(callerRole)) {
+    throw new HttpsError('permission-denied', 'Only authorized clinical specialists, coordinators, and administrators can confirm or reject referrals.');
+  }
+
   const requestId = request.data?.requestId;
   const decision = request.data?.decision;
   if (typeof requestId !== 'string' || !['accepted', 'rejected'].includes(decision)) {
@@ -146,7 +167,7 @@ export const confirmReferral = onCall({ region: 'us-central1' }, async (request)
   return { ok: true, status: referralStatus };
 });
 
-export const verifyReferralOtp = onCall({ region: 'us-central1' }, async (request) => {
+export const verifyReferralOtp = onCall({ region: 'us-central1', secrets: [otpSecret] }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'You must be signed in to verify a referral code.');
   }
@@ -189,3 +210,83 @@ export const verifyReferralOtp = onCall({ region: 'us-central1' }, async (reques
   }
   return verification;
 });
+
+export const provisionStaffUser = onCall({ region: 'us-central1' }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'You must be signed in to provision user accounts.');
+  }
+
+  // Verify that the caller is a hospital_admin or system_admin
+  const callerDoc = await db.collection('users').doc(request.auth.uid).get();
+  if (!callerDoc.exists) {
+    throw new HttpsError('permission-denied', 'Caller user profile not found.');
+  }
+  const callerRole = callerDoc.data()?.role;
+  const isSysAdmin = callerRole === 'system_admin';
+  const isHospAdmin = callerRole === 'hospital_admin' || callerRole === 'administrator';
+
+  if (!isSysAdmin && !isHospAdmin) {
+    throw new HttpsError('permission-denied', 'Only Hospital Administrators and System Administrators can provision staff accounts.');
+  }
+
+  const { email, password, displayName, role, jobTitle, facilityId, facilityName, phone } = request.data ?? {};
+
+  if (typeof email !== 'string' || !email.includes('@')) {
+    throw new HttpsError('invalid-argument', 'A valid email address is required.');
+  }
+
+  // Hospital Admins cannot provision system_admin accounts
+  if (role === 'system_admin' && !isSysAdmin) {
+    throw new HttpsError('permission-denied', 'Only IT Super Admins can provision System Administrator accounts.');
+  }
+
+  // QA-01: Generate secure temporary password server-side if not provided
+  const tempPassword = (typeof password === 'string' && password.length >= 8)
+    ? password
+    : `CareLink#${randomBytes(4).toString('hex')}!`;
+
+  // SEC-06: Validate targetFacilityId
+  let targetFacilityId = callerDoc.data()?.facilityId || 'KBTH-01';
+  let targetFacilityName = callerDoc.data()?.facilityName || 'Assigned Hospital';
+
+  if (isSysAdmin && facilityId) {
+    if (typeof facilityId !== 'string' || !/^[A-Z0-9_-]{2,20}$/i.test(facilityId)) {
+      throw new HttpsError('invalid-argument', 'Invalid facility ID format.');
+    }
+    targetFacilityId = facilityId.trim();
+    targetFacilityName = typeof facilityName === 'string' && facilityName.trim() ? facilityName.trim() : 'Assigned Hospital';
+  }
+
+  try {
+    const adminAuth = getAuth();
+    const newUser = await adminAuth.createUser({
+      email: email.trim().toLowerCase(),
+      password: tempPassword,
+      displayName: displayName || 'Staff Member',
+    });
+
+    const userProfile = {
+      uid: newUser.uid,
+      displayName: displayName || 'Staff Member',
+      email: email.trim().toLowerCase(),
+      role: role || 'pcp',
+      jobTitle: jobTitle || 'Clinical Staff',
+      facilityName: targetFacilityName,
+      facilityId: targetFacilityId,
+      phone: phone || '',
+      notificationsEnabled: true,
+      twoStepEnabled: role === 'hospital_admin' || role === 'system_admin',
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      provisionedBy: request.auth.uid,
+    };
+
+    await db.collection('users').doc(newUser.uid).set(userProfile);
+
+    return { ok: true, uid: newUser.uid, user: userProfile, tempPassword };
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : 'Provisioning failed';
+    throw new HttpsError('internal', errMsg);
+  }
+});
+

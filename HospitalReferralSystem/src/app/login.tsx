@@ -1,518 +1,756 @@
+import { useState } from 'react';
 import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useColorScheme,
+  View,
+} from 'react-native';
 
-import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  sendPasswordResetEmail,
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  updateProfile,
-  type User,
-} from 'firebase/auth';
+import { AppIcon } from '@/components/ui/app-icon';
+import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+import { ALL_ROLES, AppRole, ROLE_DEFINITIONS } from '@/constants/roles';
+import { useAuth } from '@/context/auth-context';
 
-import {
-  doc,
-  getDoc,
-  serverTimestamp,
-  setDoc,
-} from 'firebase/firestore';
+export default function LoginScreen() {
+  const scheme = useColorScheme();
+  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const { signIn, signUp, resetPassword } = useAuth();
 
-import { auth, db } from '@/lib/firebase';
+  const [selectedRole, setSelectedRole] = useState<AppRole>('pcp');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
 
-export type PortalRole =
-  | 'hospital'
-  | 'administrator';
+  // Form fields - clean and empty by default
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
 
-export type HospitalJobTitle =
-  | 'Doctor'
-  | 'Nurse';
+  // UI state
+  const [showPassword, setShowPassword] = useState(false);
+  const [showDemoPicker, setShowDemoPicker] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-export type AppRole =
-  | 'administrator'
-  | 'staff';
+  const currentRoleMeta = ROLE_DEFINITIONS[selectedRole];
 
-export type AppUserProfile = {
-  uid: string;
-  displayName: string;
-  email: string;
-  role: AppRole;
-  jobTitle: string;
-  facilityName: string;
-  facilityId: string;
-  phone: string;
-  notificationsEnabled: boolean;
-  twoStepEnabled: boolean;
-};
-
-export type SignUpPayload = {
-  fullName: string;
-  email: string;
-  password: string;
-  jobTitle: HospitalJobTitle;
-  facilityName: string;
-  facilityId: string;
-  phone?: string;
-};
-
-type AuthContextType = {
-  user: User | null;
-  profile: AppUserProfile | null;
-  loading: boolean;
-  error: string | null;
-
-  signIn: (
-    email: string,
-    password: string,
-    portal: PortalRole,
-  ) => Promise<AppUserProfile>;
-
-  signUp: (
-    payload: SignUpPayload,
-  ) => Promise<AppUserProfile>;
-
-  signOut: () => Promise<void>;
-
-  resetPassword: (
-    email: string,
-  ) => Promise<void>;
-
-  refreshProfile: () => Promise<void>;
-};
-
-const AuthContext =
-  createContext<AuthContextType | undefined>(
-    undefined,
-  );
-
-function getAuthErrorMessage(
-  error: unknown,
-): string {
-  const code =
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error
-      ? String(
-          (error as { code?: unknown }).code,
-        )
-      : '';
-
-  switch (code) {
-    case 'auth/invalid-email':
-      return 'Enter a valid email address.';
-
-    case 'auth/user-not-found':
-    case 'auth/wrong-password':
-    case 'auth/invalid-credential':
-      return 'Incorrect email or password.';
-
-    case 'auth/email-already-in-use':
-      return 'An account already exists with this email address.';
-
-    case 'auth/weak-password':
-      return 'Password must contain at least 8 characters.';
-
-    case 'auth/user-disabled':
-      return 'This account has been disabled. Contact your administrator.';
-
-    case 'auth/network-request-failed':
-      return 'Unable to connect to Firebase. Check your internet connection.';
-
-    case 'auth/too-many-requests':
-      return 'Too many unsuccessful attempts. Please try again later.';
-
-    default:
-      return error instanceof Error
-        ? error.message
-        : 'Authentication failed. Please try again.';
-  }
-}
-
-async function readProfile(
-  firebaseUser: User,
-): Promise<AppUserProfile> {
-  if (!db) {
-    throw new Error(
-      'Firebase Firestore is not configured.',
-    );
+  function handleRoleSelect(target: AppRole) {
+    setSelectedRole(target);
+    setFormError(null);
+    setInfoMessage(null);
+    if (!ROLE_DEFINITIONS[target].allowSelfRegistration && mode === 'signup') {
+      setMode('signin');
+    }
   }
 
-  const snapshot = await getDoc(
-    doc(db, 'users', firebaseUser.uid),
-  );
-
-  if (!snapshot.exists()) {
-    throw new Error(
-      'Your account exists, but your MediRelay profile has not been configured yet. Contact the administrator.',
-    );
+  function handleQuickFillDemo(targetRole: AppRole) {
+    setSelectedRole(targetRole);
+    const targetMeta = ROLE_DEFINITIONS[targetRole];
+    setEmail(targetMeta.demoCredentials.email);
+    setPassword('demo1234');
+    setFormError(null);
+    setInfoMessage(`Loaded credentials for ${targetMeta.title}`);
   }
 
-  const data = snapshot.data();
+  async function handleSubmit() {
+    setFormError(null);
+    setInfoMessage(null);
 
-  return {
-    uid: firebaseUser.uid,
-
-    displayName:
-      data.displayName ??
-      firebaseUser.displayName ??
-      'Clinical User',
-
-    email:
-      data.email ??
-      firebaseUser.email ??
-      '',
-
-    role:
-      data.role === 'administrator'
-        ? 'administrator'
-        : 'staff',
-
-    jobTitle:
-      data.jobTitle ??
-      'Clinical Staff',
-
-    facilityName:
-      data.facilityName ??
-      'Assigned Facility',
-
-    facilityId:
-      data.facilityId ??
-      '',
-
-    phone:
-      data.phone ??
-      firebaseUser.phoneNumber ??
-      '',
-
-    notificationsEnabled:
-      data.notificationsEnabled ?? true,
-
-    twoStepEnabled:
-      data.twoStepEnabled ?? false,
-  };
-}
-
-export function AuthProvider({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  const [user, setUser] =
-    useState<User | null>(null);
-
-  const [profile, setProfile] =
-    useState<AppUserProfile | null>(null);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [error, setError] =
-    useState<string | null>(null);
-
-  useEffect(() => {
-    if (!auth) {
-      setLoading(false);
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setFormError('Please enter your email address.');
       return;
     }
 
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (firebaseUser) => {
-          setUser(firebaseUser);
-          setError(null);
-
-          if (!firebaseUser) {
-            setProfile(null);
-            setLoading(false);
-            return;
-          }
-
-          try {
-            const nextProfile =
-              await readProfile(
-                firebaseUser,
-              );
-
-            setProfile(nextProfile);
-          } catch (err) {
-            setProfile(null);
-            setError(
-              getAuthErrorMessage(err),
-            );
-          } finally {
-            setLoading(false);
-          }
-        },
-      );
-
-    return unsubscribe;
-  }, []);
-
-  async function signIn(
-    email: string,
-    password: string,
-    portal: PortalRole,
-  ) {
-    if (!auth || !db) {
-      throw new Error(
-        'Firebase is not configured. Check your .env file.',
-      );
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setFormError('Please enter a valid email address (e.g. user@carelink.local).');
+      return;
     }
 
-    setError(null);
+    if (mode === 'forgot') {
+      setSubmitting(true);
+      try {
+        await resetPassword(cleanEmail);
+        setInfoMessage('Password recovery instructions sent to your email.');
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : 'Unable to send reset email.');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
-    try {
-      const credential =
-        await signInWithEmailAndPassword(
-          auth,
-          email.trim().toLowerCase(),
+    if (!password) {
+      setFormError('Please enter your password.');
+      return;
+    }
+
+    if (mode === 'signup') {
+      if (selectedRole !== 'patient') {
+        setFormError('Staff logins must be provisioned by your Hospital Administrator or Super Admin.');
+        return;
+      }
+      if (!fullName.trim()) {
+        setFormError('Please enter your full name.');
+        return;
+      }
+      if (password.length < 8) {
+        setFormError('Password must contain at least 8 characters.');
+        return;
+      }
+
+      setSubmitting(true);
+      try {
+        await signUp({
+          fullName: fullName.trim(),
+          email: cleanEmail,
           password,
-        );
-
-      const nextProfile =
-        await readProfile(
-          credential.user,
-        );
-
-      /*
-       * Separate authentication portals.
-       *
-       * Administrator -> administrator only
-       * Hospital      -> doctor/nurse only
-       */
-      if (
-        portal === 'administrator' &&
-        nextProfile.role !==
-          'administrator'
-      ) {
-        await firebaseSignOut(auth);
-
-        throw new Error(
-          'This account is registered as a Hospital User. Use the Hospital User portal.',
-        );
+          role: 'patient',
+          facilityName: 'Korle Bu Teaching Hospital',
+          facilityId: 'KBTH-01',
+        });
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : 'Sign up failed. Please try again.');
+      } finally {
+        setSubmitting(false);
       }
-
-      if (
-        portal === 'hospital' &&
-        nextProfile.role ===
-          'administrator'
-      ) {
-        await firebaseSignOut(auth);
-
-        throw new Error(
-          'Administrator accounts must sign in through the Administrator portal.',
-        );
-      }
-
-      setUser(credential.user);
-      setProfile(nextProfile);
-
-      return nextProfile;
-    } catch (err) {
-      const message =
-        getAuthErrorMessage(err);
-
-      setError(message);
-
-      throw new Error(message);
-    }
-  }
-
-  async function signUp(
-    payload: SignUpPayload,
-  ) {
-    if (!auth || !db) {
-      throw new Error(
-        'Firebase is not configured. Check your .env file.',
-      );
-    }
-
-    setError(null);
-
-    try {
-      /*
-       * Public registration is for Hospital Users.
-       * Administrators are provisioned separately.
-       */
-      const credential =
-        await createUserWithEmailAndPassword(
-          auth,
-          payload.email
-            .trim()
-            .toLowerCase(),
-          payload.password,
-        );
-
-      await updateProfile(
-        credential.user,
-        {
-          displayName:
-            payload.fullName.trim(),
-        },
-      );
-
-      const userDocument = {
-        uid: credential.user.uid,
-
-        displayName:
-          payload.fullName.trim(),
-
-        email:
-          payload.email
-            .trim()
-            .toLowerCase(),
-
-        role: 'staff',
-
-        jobTitle:
-          payload.jobTitle,
-
-        facilityName:
-          payload.facilityName,
-
-        facilityId:
-          payload.facilityId,
-
-        phone:
-          payload.phone ?? '',
-
-        notificationsEnabled: true,
-
-        twoStepEnabled: false,
-
-        createdAt:
-          serverTimestamp(),
-
-        updatedAt:
-          serverTimestamp(),
-      };
-
-      await setDoc(
-        doc(
-          db,
-          'users',
-          credential.user.uid,
-        ),
-        userDocument,
-      );
-
-      const nextProfile =
-        await readProfile(
-          credential.user,
-        );
-
-      setUser(credential.user);
-      setProfile(nextProfile);
-
-      return nextProfile;
-    } catch (err) {
-      const message =
-        getAuthErrorMessage(err);
-
-      setError(message);
-
-      throw new Error(message);
-    }
-  }
-
-  async function signOut() {
-    if (!auth) return;
-
-    await firebaseSignOut(auth);
-
-    setUser(null);
-    setProfile(null);
-    setError(null);
-  }
-
-  async function resetPassword(
-    email: string,
-  ) {
-    if (!auth) {
-      throw new Error(
-        'Firebase Authentication is not configured.',
-      );
-    }
-
-    try {
-      await sendPasswordResetEmail(
-        auth,
-        email.trim().toLowerCase(),
-      );
-    } catch (err) {
-      const message =
-        getAuthErrorMessage(err);
-
-      setError(message);
-
-      throw new Error(message);
-    }
-  }
-
-  async function refreshProfile() {
-    if (!auth?.currentUser) {
       return;
     }
 
+    // Sign in mode
+    setSubmitting(true);
     try {
-      const nextProfile =
-        await readProfile(
-          auth.currentUser,
-        );
-
-      setProfile(nextProfile);
+      await signIn(cleanEmail, password, selectedRole);
     } catch (err) {
-      setError(
-        getAuthErrorMessage(err),
-      );
+      setFormError(err instanceof Error ? err.message : 'Sign in failed. Please check your credentials.');
+    } finally {
+      setSubmitting(false);
     }
   }
-
-  const value = useMemo(
-    () => ({
-      user,
-      profile,
-      loading,
-      error,
-      signIn,
-      signUp,
-      signOut,
-      resetPassword,
-      refreshProfile,
-    }),
-    [
-      user,
-      profile,
-      loading,
-      error,
-    ],
-  );
 
   return (
-    <AuthContext.Provider
-      value={value}
-    >
-      {children}
-    </AuthContext.Provider>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={[styles.container, { backgroundColor: colors.background }]}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled">
+        <View style={styles.cardWrapper}>
+          {/* Header Brand */}
+          <View style={styles.header}>
+            <View style={[styles.brandBadge, { backgroundColor: colors.primary }]}>
+              <Text style={styles.brandCross}>+</Text>
+            </View>
+            <Text style={[styles.brandTitle, { color: colors.text }]}>CareLink</Text>
+            <Text style={[styles.brandSubtitle, { color: colors.textSecondary }]}>
+              Hospital Referral & Capacity Network · Strict RBAC
+            </Text>
+
+            <View style={[styles.authorityTag, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+              <AppIcon ios="shield.lefthalf.filled" android="security" color={colors.primary} size={13} />
+              <Text style={[styles.authorityTagText, { color: colors.text }]}>
+                Credentials Provisioned by Hospital Admin or Super Admin
+              </Text>
+            </View>
+          </View>
+
+          {/* Role Portal Selector */}
+          <View style={styles.rolePickerSection}>
+            <Text style={[styles.pickerTitle, { color: colors.textSecondary }]}>
+              SELECT TARGET ROLE PORTAL TO ENTER CREDENTIALS
+            </Text>
+
+            <View style={styles.rolesGrid}>
+              {ALL_ROLES.map((roleKey) => {
+                const meta = ROLE_DEFINITIONS[roleKey];
+                const isSelected = selectedRole === roleKey;
+                return (
+                  <Pressable
+                    key={roleKey}
+                    onPress={() => handleRoleSelect(roleKey)}
+                    style={({ pressed }) => [
+                      styles.roleChip,
+                      {
+                        backgroundColor: isSelected ? colors.surface : colors.backgroundElement,
+                        borderColor: isSelected ? colors.primary : 'transparent',
+                      },
+                      pressed && styles.pressed,
+                    ]}>
+                    <View
+                      style={[
+                        styles.chipIcon,
+                        {
+                          backgroundColor: meta.badgeColor.bg,
+                          borderColor: meta.badgeColor.border,
+                        },
+                      ]}>
+                      <AppIcon
+                        ios={meta.icon.ios}
+                        android={meta.icon.android}
+                        color={meta.badgeColor.text}
+                        size={13}
+                      />
+                    </View>
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.chipLabel,
+                        { color: isSelected ? colors.text : colors.textSecondary },
+                        isSelected && styles.chipLabelActive,
+                      ]}>
+                      {meta.shortTitle}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Form Card */}
+          <View
+            style={[
+              styles.card,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}>
+            {/* Selected Role Banner */}
+            <View
+              style={[
+                styles.selectedRoleBanner,
+                {
+                  backgroundColor: currentRoleMeta.badgeColor.bg,
+                  borderColor: currentRoleMeta.badgeColor.border,
+                },
+              ]}>
+              <AppIcon
+                ios={currentRoleMeta.icon.ios}
+                android={currentRoleMeta.icon.android}
+                color={currentRoleMeta.badgeColor.text}
+                size={18}
+              />
+              <View style={styles.roleBannerTexts}>
+                <Text style={[styles.roleBannerTitle, { color: currentRoleMeta.badgeColor.text }]}>
+                  {currentRoleMeta.title} Portal
+                </Text>
+                <Text style={[styles.roleBannerDesc, { color: colors.textSecondary }]}>
+                  {currentRoleMeta.description}
+                </Text>
+              </View>
+            </View>
+
+            {/* Quick Demo Fill Accordion (Safe & Collapsible) */}
+            <View style={[styles.demoAccordion, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+              <Pressable
+                onPress={() => setShowDemoPicker((prev) => !prev)}
+                style={styles.demoAccordionHeader}>
+                <View style={styles.demoAccordionHeaderLeft}>
+                  <AppIcon ios="bolt.shield.fill" android="bolt" color={colors.primary} size={15} />
+                  <Text style={[styles.demoAccordionTitle, { color: colors.text }]}>
+                    Demo Testing Accounts (1-Tap Fill)
+                  </Text>
+                </View>
+                <AppIcon
+                  ios={showDemoPicker ? 'chevron.up' : 'chevron.down'}
+                  android={showDemoPicker ? 'expand_less' : 'expand_more'}
+                  color={colors.textSecondary}
+                  size={15}
+                />
+              </Pressable>
+
+              {showDemoPicker && (
+                <View style={styles.demoAccordionBody}>
+                  <Text style={[styles.demoAccordionSub, { color: colors.textSecondary }]}>
+                    Tap a role to load verified testing credentials (Default password: demo1234):
+                  </Text>
+                  <View style={styles.demoChipsGrid}>
+                    {ALL_ROLES.map((roleKey) => {
+                      const meta = ROLE_DEFINITIONS[roleKey];
+                      const isCurr = selectedRole === roleKey;
+                      return (
+                        <Pressable
+                          key={`demo-${roleKey}`}
+                          onPress={() => handleQuickFillDemo(roleKey)}
+                          style={({ pressed }) => [
+                            styles.quickChip,
+                            {
+                              backgroundColor: isCurr ? colors.surface : colors.background,
+                              borderColor: isCurr ? colors.primary : colors.border,
+                            },
+                            pressed && styles.pressed,
+                          ]}>
+                          <Text
+                            style={[
+                              styles.quickChipText,
+                              { color: isCurr ? colors.primary : colors.text },
+                            ]}>
+                            {meta.shortTitle}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.cardHeading}>
+              <Text style={[styles.cardTitle, { color: colors.text }]}>
+                {mode === 'signin'
+                  ? `Sign In as ${currentRoleMeta.shortTitle}`
+                  : mode === 'signup'
+                    ? 'Register Patient Account'
+                    : 'Reset Account Password'}
+              </Text>
+              <Text style={[styles.cardSubtext, { color: colors.textSecondary }]}>
+                {mode === 'signin'
+                  ? 'Sign in using the login credentials issued for your account.'
+                  : mode === 'signup'
+                    ? 'Register your profile to access your referral timeline and medical records.'
+                    : 'Enter your registered email to receive password recovery instructions.'}
+              </Text>
+            </View>
+
+            {/* Error & Info Alerts */}
+            {formError ? (
+              <View style={[styles.alert, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }]}>
+                <AppIcon ios="exclamationmark.circle.fill" android="error" color={colors.danger} size={18} />
+                <Text style={[styles.alertText, { color: colors.danger }]}>{formError}</Text>
+              </View>
+            ) : null}
+
+            {infoMessage ? (
+              <View style={[styles.alert, { backgroundColor: colors.primarySoft, borderColor: colors.primary }]}>
+                <AppIcon ios="checkmark.circle.fill" android="check_circle" color={colors.primary} size={18} />
+                <Text style={[styles.alertText, { color: colors.primary }]}>{infoMessage}</Text>
+              </View>
+            ) : null}
+
+            {/* Form Fields */}
+            {mode === 'signup' && (
+              <View style={styles.field}>
+                <Text style={[styles.label, { color: colors.textSecondary }]}>Full Name</Text>
+                <TextInput
+                  value={fullName}
+                  onChangeText={setFullName}
+                  placeholder="e.g. Ama Serwaa Owusu"
+                  placeholderTextColor={colors.textSecondary}
+                  autoCapitalize="words"
+                  autoComplete="name"
+                  textContentType="name"
+                  style={[
+                    styles.input,
+                    { color: colors.text, backgroundColor: colors.background, borderColor: colors.border },
+                  ]}
+                />
+              </View>
+            )}
+
+            <View style={styles.field}>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Email Address (Login ID)</Text>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="name@hospital.gov.gh"
+                placeholderTextColor={colors.textSecondary}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                textContentType="emailAddress"
+                returnKeyType="next"
+                style={[
+                  styles.input,
+                  { color: colors.text, backgroundColor: colors.background, borderColor: colors.border },
+                ]}
+              />
+            </View>
+
+            {mode !== 'forgot' && (
+              <View style={styles.field}>
+                <View style={styles.passwordHeader}>
+                  <Text style={[styles.label, { color: colors.textSecondary }]}>Password</Text>
+                  {mode === 'signin' && (
+                    <Pressable onPress={() => setMode('forgot')}>
+                      <Text style={[styles.linkText, { color: colors.primary }]}>Forgot?</Text>
+                    </Pressable>
+                  )}
+                </View>
+                <View style={styles.passwordContainer}>
+                  <TextInput
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder={mode === 'signup' ? 'Min. 8 characters' : '••••••••'}
+                    placeholderTextColor={colors.textSecondary}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                    textContentType={mode === 'signup' ? 'newPassword' : 'password'}
+                    returnKeyType="done"
+                    style={[
+                      styles.passwordInput,
+                      { color: colors.text, backgroundColor: colors.background, borderColor: colors.border },
+                    ]}
+                  />
+                  <Pressable
+                    accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                    onPress={() => setShowPassword((prev) => !prev)}
+                    style={styles.eyeToggle}>
+                    <AppIcon
+                      ios={showPassword ? 'eye.slash' : 'eye'}
+                      android={showPassword ? 'visibility_off' : 'visibility'}
+                      color={colors.textSecondary}
+                      size={18}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+            )}
+
+            {/* Primary Submit Button */}
+            <Pressable
+              disabled={submitting}
+              onPress={handleSubmit}
+              style={({ pressed }: { pressed: boolean }) => [
+                styles.primaryButton,
+                { backgroundColor: colors.primary },
+                (pressed || submitting) && styles.pressed,
+              ]}>
+              {submitting ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <>
+                  <AppIcon
+                    ios={mode === 'signin' ? 'arrow.right' : mode === 'signup' ? 'person.badge.plus' : 'envelope'}
+                    android="arrow_forward"
+                    color={colors.white}
+                    size={16}
+                  />
+                  <Text style={styles.primaryButtonText}>
+                    {mode === 'signin'
+                      ? `Sign In to ${currentRoleMeta.shortTitle} Portal`
+                      : mode === 'signup'
+                        ? 'Create Patient Account'
+                        : 'Send Recovery Email'}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+
+            {/* Mode Switchers */}
+            <View style={styles.footerRow}>
+              {mode === 'signin' ? (
+                <>
+                  {selectedRole === 'patient' ? (
+                    <Pressable onPress={() => setMode('signup')}>
+                      <Text style={[styles.footerText, { color: colors.textSecondary }]}>
+                        Patient without credentials?{' '}
+                        <Text style={[styles.footerHighlight, { color: colors.primary }]}>
+                          Register Portal Access
+                        </Text>
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    <Text style={[styles.noticeText, { color: colors.textSecondary }]}>
+                      🔒 Need access to {currentRoleMeta.shortTitle}? Request login details from your Hospital Administrator or Super Admin.
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <Pressable onPress={() => setMode('signin')}>
+                  <Text style={[styles.footerText, { color: colors.textSecondary }]}>
+                    Already have credentials?{' '}
+                    <Text style={[styles.footerHighlight, { color: colors.primary }]}>
+                      Sign In
+                    </Text>
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-export function useAuth() {
-  const context =
-    useContext(AuthContext);
-
-  if (!context) {
-    throw new Error(
-      'useAuth must be used inside AuthProvider.',
-    );
-  }
-
-  return context;
-}
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.four,
+    paddingVertical: Spacing.six,
+  },
+  cardWrapper: {
+    width: '100%',
+    maxWidth: MaxContentWidth > 520 ? 500 : MaxContentWidth,
+    gap: Spacing.four,
+  },
+  header: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  brandBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  brandCross: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    lineHeight: 32,
+    fontWeight: '500',
+  },
+  brandTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  brandSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  authorityTag: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  authorityTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  rolePickerSection: {
+    gap: 8,
+  },
+  pickerTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  rolesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'center',
+  },
+  roleChip: {
+    borderWidth: 1.5,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  chipIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  chipLabelActive: {
+    fontWeight: '800',
+  },
+  card: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: Spacing.five,
+    gap: Spacing.four,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  selectedRoleBanner: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  roleBannerTexts: {
+    flex: 1,
+    gap: 2,
+  },
+  roleBannerTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  roleBannerDesc: {
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  demoAccordion: {
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  demoAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  demoAccordionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  demoAccordionTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  demoAccordionBody: {
+    padding: 10,
+    paddingTop: 2,
+    gap: 8,
+  },
+  demoAccordionSub: {
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  demoChipsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  quickChip: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  quickChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  cardHeading: {
+    gap: 3,
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  cardSubtext: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  alert: {
+    borderRadius: 7,
+    borderWidth: 1,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  alertText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
+  },
+  field: {
+    gap: 6,
+  },
+  label: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  input: {
+    height: 42,
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    fontSize: 13,
+  },
+  passwordContainer: {
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  passwordInput: {
+    height: 42,
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingLeft: 12,
+    paddingRight: 42,
+    fontSize: 13,
+  },
+  eyeToggle: {
+    position: 'absolute',
+    right: 12,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  passwordHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  linkText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  primaryButton: {
+    height: 44,
+    borderRadius: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  footerRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 4,
+  },
+  footerText: {
+    fontSize: 12,
+  },
+  footerHighlight: {
+    fontWeight: '800',
+  },
+  noticeText: {
+    fontSize: 11,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    lineHeight: 15,
+  },
+  pressed: {
+    opacity: 0.7,
+  },
+});

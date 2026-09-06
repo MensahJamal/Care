@@ -14,12 +14,19 @@ import {
 import { AppIcon } from '@/components/ui/app-icon';
 import { Screen } from '@/components/ui/screen';
 import { Colors, Spacing } from '@/constants/theme';
+import { ALL_ROLES, AppRole, ROLE_DEFINITIONS } from '@/constants/roles';
 import { useAuth } from '@/context/auth-context';
+import { useRbac } from '@/hooks/use-rbac';
+import { RoleSwitcherBanner } from '@/components/dashboards/role-switcher-banner';
+import { subscribeToUsers, callProvisionStaffUser } from '@/lib/firestore';
 
 const demoTeam = [
-  { initials: 'NA', name: 'Nana Addo', role: 'Senior Medical Officer', access: 'Administrator' },
-  { initials: 'EF', name: 'Efua Frimpong', role: 'Charge Nurse', access: 'Staff' },
-  { initials: 'KM', name: 'Kofi Manu', role: 'Referral Coordinator', access: 'Staff' },
+  { initials: 'NA', name: 'Dr. Naa Lartey', role: 'Consultant Cardiologist', access: 'Specialist' },
+  { initials: 'KA', name: 'Dr. Kwame Addo', role: 'Senior Medical Officer', access: 'PCP Doctor' },
+  { initials: 'KM', name: 'Kofi Manu', role: 'Intake Coordinator', access: 'Intake Staff' },
+  { initials: 'AD', name: 'Akosua Darko', role: 'Lead Lab Scientist', access: 'Lab Tech' },
+  { initials: 'DO', name: 'Pharm. David Osei', role: 'Clinical Pharmacist', access: 'Pharmacist' },
+  { initials: 'AM', name: 'Administrator Mensah', role: 'Clinical Operations Director', access: 'Hospital Admin' },
 ];
 
 export default function AccountScreen() {
@@ -27,19 +34,14 @@ export default function AccountScreen() {
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
   const { width } = useWindowDimensions();
   const compact = width < 540;
-  const { profile, user, signOutUser } = useAuth();
-  const { editProfile } = useAuth();
+  const { profile, signOutUser, editProfile, isFirebaseMode } = useAuth();
+  const { roleMeta, isHospitalAdmin, isSystemAdmin } = useRbac();
   const [editor, setEditor] = useState<'profile' | 'facility' | 'contact' | 'notifications' | 'security' | null>(null);
-  const isAdministrator = profile?.role === 'administrator';
-  const loginEmail = user?.email ?? profile?.email;
-  const displayName = loginEmail
-    ? loginEmail
-        .split('@')[0]
-        .split(/[._-]+/)
-        .filter(Boolean)
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ')
-    : 'Clinical user';
+  const [provisionOpen, setProvisionOpen] = useState(false);
+  const [teamList, setTeamList] = useState(demoTeam);
+
+  const canManageTeam = isHospitalAdmin || isSystemAdmin;
+  const displayName = profile?.displayName || 'Clinical User';
   const initials = displayName
     .split(' ')
     .map((part) => part[0])
@@ -47,8 +49,41 @@ export default function AccountScreen() {
     .slice(0, 2)
     .toUpperCase();
 
+  useEffect(() => {
+    if (!isFirebaseMode) return;
+    const unsub = subscribeToUsers(
+      isSystemAdmin ? undefined : profile?.facilityId,
+      (users) => {
+        if (users && users.length > 0) {
+          const mapped = users.map((u) => {
+            const role = (u.role as AppRole) || 'pcp';
+            const meta = ROLE_DEFINITIONS[role] || ROLE_DEFINITIONS.pcp;
+            const name = u.displayName || 'Staff Member';
+            const memberInitials = name
+              .split(' ')
+              .map((part: string) => part[0])
+              .join('')
+              .slice(0, 2)
+              .toUpperCase();
+            return {
+              initials: memberInitials,
+              name,
+              role: u.jobTitle || meta.title,
+              access: meta.shortTitle,
+            };
+          });
+          setTeamList(mapped);
+        }
+      },
+      (err) => console.error('Failed to subscribe to live team directory:', err),
+    );
+    return () => unsub?.();
+  }, [isFirebaseMode, isSystemAdmin, profile?.facilityId]);
+
   return (
-    <Screen title="Account & administration" subtitle="Manage your profile, facility and staff access">
+    <Screen title="Account & Identity" subtitle="Manage your profile, verified role credentials and clinical access">
+      <RoleSwitcherBanner />
+
       <View style={[styles.profile, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={[styles.profileAvatar, { backgroundColor: colors.primary }]}>
           <Text style={styles.profileInitials}>{initials}</Text>
@@ -56,11 +91,25 @@ export default function AccountScreen() {
         <View style={styles.profileMain}>
           <Text style={[styles.profileName, { color: colors.text }]}>{displayName}</Text>
           <Text style={[styles.profileRole, { color: colors.textSecondary }]}>
-            {profile?.jobTitle} · {isAdministrator ? 'Administrator' : 'Staff'}
+            {profile?.jobTitle} · {roleMeta.title}
           </Text>
-          <View style={[styles.verified, { backgroundColor: colors.primarySoft }]}>
-            <AppIcon ios="checkmark.shield.fill" android="shield_person" color={colors.primary} size={13} />
-            <Text style={[styles.verifiedText, { color: colors.primary }]}>Verified clinical account</Text>
+          <View
+            style={[
+              styles.verified,
+              {
+                backgroundColor: roleMeta.badgeColor.bg,
+                borderColor: roleMeta.badgeColor.border,
+              },
+            ]}>
+            <AppIcon
+              ios={roleMeta.icon.ios}
+              android={roleMeta.icon.android}
+              color={roleMeta.badgeColor.text}
+              size={13}
+            />
+            <Text style={[styles.verifiedText, { color: roleMeta.badgeColor.text }]}>
+              Verified {roleMeta.shortTitle} Role
+            </Text>
           </View>
         </View>
         <Pressable
@@ -81,7 +130,7 @@ export default function AccountScreen() {
           icon={{ ios: 'building.2', android: 'medical_services' }}
           title="Facility profile"
           description={profile?.facilityName ?? 'Assigned facility'}
-          detail={profile?.facilityId ? `${profile.facilityId} · Connected` : 'Facility not assigned'}
+          detail={profile?.facilityId ? `${profile.facilityId} · Verified Node` : 'Facility not assigned'}
         />
         <SettingCard
           onPress={() => setEditor('contact')}
@@ -97,48 +146,51 @@ export default function AccountScreen() {
           icon={{ ios: 'bell', android: 'notifications' }}
           title="Notifications"
           description={profile?.notificationsEnabled ? 'Emergency referrals' : 'Notifications paused'}
-          detail={profile?.notificationsEnabled ? 'Email and push enabled' : 'Email and push disabled'}
+          detail={profile?.notificationsEnabled ? 'Instant alert routing active' : 'Notifications disabled'}
         />
         <SettingCard
           onPress={() => setEditor('security')}
           compact={compact}
           icon={{ ios: 'lock.shield', android: 'shield_person' }}
-          title="Security"
-          description={profile?.twoStepEnabled ? 'Two-step verification' : 'Standard sign-in'}
-          detail={profile?.twoStepEnabled ? 'Additional verification enabled' : 'Additional verification disabled'}
+          title="Security & RBAC"
+          description={profile?.twoStepEnabled ? 'Two-step verification' : 'Standard MFA'}
+          detail={`Role: ${roleMeta.shortTitle} · Strict Enforcement`}
         />
       </View>
 
+      {/* Multi-Disciplinary Care Team Roster */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Staff access</Text>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>Network Staff & RBAC Directory</Text>
             <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>
-              Administrators can invite staff and assign permissions
+              {canManageTeam
+                ? 'Administrators can provision and reassign RBAC staff permissions'
+                : 'Staff access is strictly governed by your hospital and IT system administrator'}
             </Text>
           </View>
-          {isAdministrator ? (
+          {canManageTeam ? (
             <Pressable
+              accessibilityLabel="Provision new staff member"
+              onPress={() => setProvisionOpen(true)}
               style={({ pressed }) => [
                 styles.inviteButton,
                 { backgroundColor: colors.primary },
                 pressed && styles.pressed,
               ]}>
               <AppIcon ios="person.badge.plus" android="group" color={colors.white} size={16} />
-              <Text style={styles.inviteText}>Invite staff</Text>
+              <Text style={styles.inviteText}>Provision Staff</Text>
             </Pressable>
           ) : null}
         </View>
-        {!isAdministrator ? (
-          <Text style={[styles.accessNotice, { color: colors.textSecondary, backgroundColor: colors.backgroundElement }]}>Staff access is managed by your facility administrator.</Text>
-        ) : null}
+
         <View style={[styles.teamList, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          {demoTeam.map((member, index) => (
+          {teamList.map((member, index) => (
             <View
-              key={member.name}
+              key={`${member.name}-${index}`}
               style={[
                 styles.teamRow,
-                index < demoTeam.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                index < teamList.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
               ]}>
               <View style={[styles.teamAvatar, { backgroundColor: colors.infoSoft }]}>
                 <Text style={[styles.teamInitials, { color: colors.info }]}>{member.initials}</Text>
@@ -151,50 +203,62 @@ export default function AccountScreen() {
                 style={[
                   styles.accessBadge,
                   {
-                    backgroundColor:
-                      member.access === 'Administrator' ? colors.primarySoft : colors.backgroundElement,
+                    backgroundColor: colors.primarySoft,
                   },
                 ]}>
                 <Text
                   style={[
                     styles.accessText,
                     {
-                      color:
-                        member.access === 'Administrator' ? colors.primary : colors.textSecondary,
+                      color: colors.primary,
                     },
                   ]}>
                   {member.access}
                 </Text>
               </View>
-              <Pressable accessibilityLabel={`More options for ${member.name}`} hitSlop={10}>
-                <AppIcon ios="ellipsis" android="more_horiz" color={colors.textSecondary} size={18} />
-              </Pressable>
             </View>
           ))}
         </View>
       </View>
 
-      <Pressable onPress={signOutUser} style={({ pressed }) => [styles.signOut, { borderColor: colors.border }, pressed && styles.pressed]}>
-        <Text style={[styles.signOutText, { color: colors.danger }]}>Sign out</Text>
+      <Pressable
+        onPress={signOutUser}
+        style={({ pressed }) => [styles.signOut, { borderColor: colors.border }, pressed && styles.pressed]}>
+        <Text style={[styles.signOutText, { color: colors.danger }]}>Sign Out of {roleMeta.shortTitle} Session</Text>
       </Pressable>
 
       <View style={[styles.audit, { backgroundColor: colors.infoSoft }]}>
         <AppIcon ios="doc.text.magnifyingglass" android="search" color={colors.info} size={20} />
         <View style={styles.auditMain}>
-          <Text style={[styles.auditTitle, { color: colors.text }]}>Clinical audit log</Text>
+          <Text style={[styles.auditTitle, { color: colors.text }]}>RBAC Security & Compliance Audit Trail</Text>
           <Text style={[styles.auditText, { color: colors.textSecondary }]}>
-            Referral decisions and capacity changes are recorded for accountability.
+            All access tokens, triage decisions, and role handoffs are cryptographically logged for clinical governance.
           </Text>
         </View>
-        <AppIcon ios="chevron.right" android="arrow_forward" color={colors.info} size={17} />
       </View>
-      <AccountEditor
-        section={editor}
-        profile={profile}
-        onClose={() => setEditor(null)}
-        onSave={async (updates) => {
-          await editProfile(updates);
-          setEditor(null);
+
+      {editor && (
+        <AccountEditor
+          key={editor}
+          section={editor}
+          profile={profile}
+          canManageFacility={canManageTeam}
+          onClose={() => setEditor(null)}
+          onSave={async (updates) => {
+            await editProfile(updates);
+            setEditor(null);
+          }}
+        />
+      )}
+
+      <ProvisionStaffModal
+        visible={provisionOpen}
+        onClose={() => setProvisionOpen(false)}
+        facilityId={profile?.facilityId || 'KBTH-01'}
+        facilityName={profile?.facilityName || 'Korle Bu Teaching Hospital'}
+        isSysAdmin={isSystemAdmin}
+        onProvisioned={(newMember) => {
+          setTeamList((prev) => [newMember, ...prev]);
         }}
       />
     </Screen>
@@ -243,11 +307,13 @@ function SettingCard({
 function AccountEditor({
   section,
   profile,
+  canManageFacility,
   onClose,
   onSave,
 }: {
   section: 'profile' | 'facility' | 'contact' | 'notifications' | 'security' | null;
   profile: ReturnType<typeof useAuth>['profile'];
+  canManageFacility: boolean;
   onClose: () => void;
   onSave: (updates: Partial<NonNullable<ReturnType<typeof useAuth>['profile']>>) => Promise<void>;
 }) {
@@ -260,33 +326,26 @@ function AccountEditor({
   const [notificationsEnabled, setNotificationsEnabled] = useState(profile?.notificationsEnabled ?? true);
   const [twoStepEnabled, setTwoStepEnabled] = useState(profile?.twoStepEnabled ?? false);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setJobTitle(profile?.jobTitle ?? '');
-    setFacilityName(profile?.facilityName ?? '');
-    setFacilityId(profile?.facilityId ?? '');
-    setPhone(profile?.phone ?? '');
-    setNotificationsEnabled(profile?.notificationsEnabled ?? true);
-    setTwoStepEnabled(profile?.twoStepEnabled ?? false);
-  }, [profile, section]);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   if (!section || !profile) return null;
 
   const titles = {
-    profile: 'Edit profile',
-    facility: 'Edit facility profile',
-    contact: 'Edit referral contact',
-    notifications: 'Edit notifications',
-    security: 'Edit security',
+    profile: 'Edit Profile Information',
+    facility: 'Edit Facility Assignment',
+    contact: 'Edit Referral Contact',
+    notifications: 'Edit Notification Rules',
+    security: 'Edit Security Settings',
   };
 
   async function save() {
     setSaving(true);
+    setSaveError(null);
     try {
       const updates =
         section === 'profile'
           ? { jobTitle }
-          : section === 'facility'
+          : section === 'facility' && canManageFacility
             ? { facilityName, facilityId }
             : section === 'contact'
               ? { phone }
@@ -294,6 +353,8 @@ function AccountEditor({
                 ? { notificationsEnabled }
                 : { twoStepEnabled };
       await onSave(updates);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to update profile.');
     } finally {
       setSaving(false);
     }
@@ -302,34 +363,73 @@ function AccountEditor({
   return (
     <Modal transparent visible animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <View style={[styles.editorModal, { backgroundColor: colors.surface }]}> 
+        <View style={[styles.editorModal, { backgroundColor: colors.surface }]}>
           <View style={styles.modalHeader}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>{titles[section]}</Text>
-            <Pressable accessibilityLabel="Close editor" onPress={onClose} style={[styles.closeButton, { backgroundColor: colors.backgroundElement }]}>
+            <Pressable
+              accessibilityLabel="Close editor"
+              onPress={onClose}
+              style={[styles.closeButton, { backgroundColor: colors.backgroundElement }]}>
               <AppIcon ios="xmark" android="close" color={colors.text} size={17} />
             </Pressable>
           </View>
 
-          {section === 'profile' ? <EditorField label="Job title" value={jobTitle} onChangeText={setJobTitle} colors={colors} /> : null}
-          {section === 'facility' ? (
-            <>
-              <EditorField label="Facility name" value={facilityName} onChangeText={setFacilityName} colors={colors} />
-              <EditorField label="Facility ID" value={facilityId} onChangeText={setFacilityId} colors={colors} />
-            </>
+          {saveError ? (
+            <View style={[styles.errorBanner, { backgroundColor: colors.dangerSoft }]}>
+              <AppIcon ios="exclamationmark.circle.fill" android="error" color={colors.danger} size={16} />
+              <Text style={[styles.errorText, { color: colors.danger }]}>{saveError}</Text>
+            </View>
           ) : null}
-          {section === 'contact' ? <EditorField label="Phone number" value={phone} onChangeText={setPhone} colors={colors} /> : null}
+
+          {section === 'profile' ? (
+            <EditorField label="Job title" value={jobTitle} onChangeText={setJobTitle} colors={colors} />
+          ) : null}
+          {section === 'facility' ? (
+            canManageFacility ? (
+              <>
+                <EditorField label="Facility name" value={facilityName} onChangeText={setFacilityName} colors={colors} />
+                <EditorField label="Facility ID" value={facilityId} onChangeText={setFacilityId} colors={colors} />
+              </>
+            ) : (
+              <View style={[styles.lockedNotice, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+                <AppIcon ios="lock.shield.fill" android="security" color={colors.primary} size={20} />
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={[styles.lockedNoticeTitle, { color: colors.text }]}>Facility Node is Locked</Text>
+                  <Text style={[styles.lockedNoticeDesc, { color: colors.textSecondary }]}>
+                    Hospital facility assignment is cryptographically linked to your account node ({profile.facilityId}). Facility transfers must be executed by your Hospital Administrator or Super Admin.
+                  </Text>
+                </View>
+              </View>
+            )
+          ) : null}
+          {section === 'contact' ? (
+            <EditorField label="Phone number" value={phone} onChangeText={setPhone} colors={colors} />
+          ) : null}
           {section === 'notifications' ? (
-            <EditorSwitch label="Emergency referral notifications" value={notificationsEnabled} onValueChange={setNotificationsEnabled} colors={colors} />
+            <EditorSwitch
+              label="Emergency referral notifications"
+              value={notificationsEnabled}
+              onValueChange={setNotificationsEnabled}
+              colors={colors}
+            />
           ) : null}
           {section === 'security' ? (
-            <EditorSwitch label="Two-step verification" value={twoStepEnabled} onValueChange={setTwoStepEnabled} colors={colors} />
+            <EditorSwitch
+              label="Two-step verification"
+              value={twoStepEnabled}
+              onValueChange={setTwoStepEnabled}
+              colors={colors}
+            />
           ) : null}
 
           <View style={styles.editorActions}>
             <Pressable onPress={onClose} style={[styles.cancelButton, { borderColor: colors.border }]}>
               <Text style={[styles.cancelText, { color: colors.text }]}>Cancel</Text>
             </Pressable>
-            <Pressable disabled={saving} onPress={save} style={[styles.saveButton, { backgroundColor: colors.primary }, saving && styles.pressed]}>
+            <Pressable
+              disabled={saving}
+              onPress={save}
+              style={[styles.saveButton, { backgroundColor: colors.primary }, saving && styles.pressed]}>
               <Text style={styles.saveText}>{saving ? 'Saving...' : 'Save changes'}</Text>
             </Pressable>
           </View>
@@ -353,7 +453,14 @@ function EditorField({
   return (
     <View style={styles.editorField}>
       <Text style={[styles.formLabel, { color: colors.textSecondary }]}>{label}</Text>
-      <TextInput value={value} onChangeText={onChangeText} style={[styles.editorInput, { color: colors.text, backgroundColor: colors.background, borderColor: colors.border }]} />
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        style={[
+          styles.editorInput,
+          { color: colors.text, backgroundColor: colors.background, borderColor: colors.border },
+        ]}
+      />
     </View>
   );
 }
@@ -372,8 +479,246 @@ function EditorSwitch({
   return (
     <View style={styles.switchRow}>
       <Text style={[styles.switchLabel, { color: colors.text }]}>{label}</Text>
-      <Switch value={value} onValueChange={onValueChange} trackColor={{ false: colors.border, true: colors.primarySoft }} thumbColor={value ? colors.primary : colors.textSecondary} />
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ false: colors.border, true: colors.primarySoft }}
+        thumbColor={value ? colors.primary : colors.textSecondary}
+      />
     </View>
+  );
+}
+
+function ProvisionStaffModal({
+  visible,
+  onClose,
+  facilityId,
+  facilityName,
+  isSysAdmin,
+  onProvisioned,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  facilityId: string;
+  facilityName: string;
+  isSysAdmin: boolean;
+  onProvisioned: (member: { initials: string; name: string; role: string; access: string }) => void;
+}) {
+  const scheme = useColorScheme();
+  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const { registerProvisionedAccount } = useAuth();
+
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [jobTitle, setJobTitle] = useState('');
+  const [role, setRole] = useState<AppRole>('specialist');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [createdPassword, setCreatedPassword] = useState<string | null>(null);
+
+  const availableRoles: AppRole[] = isSysAdmin
+    ? ALL_ROLES.filter((r) => r !== 'patient')
+    : ALL_ROLES.filter((r) => r !== 'patient' && r !== 'system_admin');
+
+  function resetForm() {
+    setFullName('');
+    setEmail('');
+    setJobTitle('');
+    setRole('specialist');
+    setError(null);
+    setCreatedPassword(null);
+  }
+
+  async function handleProvision() {
+    if (!fullName.trim() || !email.trim()) {
+      setError('Please provide a full name and email address.');
+      return;
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    const defaultJob = jobTitle.trim() || ROLE_DEFINITIONS[role].title;
+    const initialTempPassword = `CareAuth#${Math.floor(1000 + Math.random() * 9000)}`;
+
+    try {
+      const result = await callProvisionStaffUser({
+        email: cleanEmail,
+        password: initialTempPassword,
+        displayName: fullName.trim(),
+        role,
+        jobTitle: defaultJob,
+        facilityId,
+        facilityName,
+      });
+
+      const finalPassword = result.tempPassword || initialTempPassword;
+
+      registerProvisionedAccount(
+        {
+          uid: result.uid || `prov-${Date.now()}`,
+          displayName: fullName.trim(),
+          email: cleanEmail,
+          role,
+          jobTitle: defaultJob,
+          facilityName,
+          facilityId,
+          phone: '',
+          notificationsEnabled: true,
+          twoStepEnabled: role === 'hospital_admin' || role === 'system_admin',
+        },
+        finalPassword,
+      );
+
+      const initials = fullName
+        .trim()
+        .split(' ')
+        .map((p) => p[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase();
+
+      onProvisioned({
+        initials,
+        name: fullName.trim(),
+        role: defaultJob,
+        access: ROLE_DEFINITIONS[role].shortTitle,
+      });
+
+      setCreatedPassword(finalPassword);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Provisioning failed.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.editorModal, { backgroundColor: colors.surface }]}>
+          <View style={styles.modalHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <AppIcon ios="person.badge.plus" android="group" color={colors.primary} size={20} />
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Provision Staff Account</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Close provision modal"
+              onPress={() => {
+                resetForm();
+                onClose();
+              }}
+              style={[styles.closeButton, { backgroundColor: colors.backgroundElement }]}>
+              <AppIcon ios="xmark" android="close" color={colors.text} size={16} />
+            </Pressable>
+          </View>
+
+          {createdPassword ? (
+            <View style={{ gap: 16 }}>
+              <View style={[styles.successSlip, { backgroundColor: colors.primarySoft, borderColor: colors.primary }]}>
+                <AppIcon ios="checkmark.seal.fill" android="verified" color={colors.primary} size={28} />
+                <Text style={[styles.successSlipTitle, { color: colors.primary }]}>Account Created Successfully</Text>
+                <Text style={[styles.successSlipDesc, { color: colors.textSecondary }]}>
+                  Temporary activation credentials issued for {email}:
+                </Text>
+                <View style={[styles.passwordBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Text style={[styles.passwordText, { color: colors.text }]}>{createdPassword}</Text>
+                </View>
+                <Text style={[styles.successNotice, { color: colors.textSecondary }]}>
+                  Provide this one-time password to the staff member. They will be prompted to verify credentials upon first login.
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  resetForm();
+                  onClose();
+                }}
+                style={({ pressed }) => [
+                  styles.saveButton,
+                  { backgroundColor: colors.primary },
+                  pressed && styles.pressed,
+                ]}>
+                <Text style={styles.saveText}>Done</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              {error ? (
+                <View style={[styles.errorBanner, { backgroundColor: colors.dangerSoft }]}>
+                  <AppIcon ios="exclamationmark.circle.fill" android="error" color={colors.danger} size={16} />
+                  <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
+                </View>
+              ) : null}
+
+              <EditorField label="Full name" value={fullName} onChangeText={setFullName} colors={colors} />
+              <EditorField label="Work email" value={email} onChangeText={setEmail} colors={colors} />
+              <EditorField
+                label="Job title (optional)"
+                value={jobTitle}
+                onChangeText={setJobTitle}
+                colors={colors}
+              />
+
+              <View style={styles.editorField}>
+                <Text style={[styles.formLabel, { color: colors.textSecondary }]}>ASSIGN RBAC ROLE</Text>
+                <View style={styles.roleChips}>
+                  {availableRoles.map((r) => {
+                    const active = role === r;
+                    return (
+                      <Pressable
+                        key={r}
+                        onPress={() => setRole(r)}
+                        style={[
+                          styles.roleChip,
+                          {
+                            backgroundColor: active ? colors.primary : colors.backgroundElement,
+                            borderColor: active ? colors.primaryDark : colors.border,
+                          },
+                        ]}>
+                        <Text
+                          style={[
+                            styles.roleChipText,
+                            { color: active ? colors.white : colors.text },
+                          ]}>
+                          {ROLE_DEFINITIONS[r].shortTitle}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.editorActions}>
+                <Pressable
+                  onPress={() => {
+                    resetForm();
+                    onClose();
+                  }}
+                  style={[styles.cancelButton, { borderColor: colors.border }]}>
+                  <Text style={[styles.cancelText, { color: colors.text }]}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  disabled={loading}
+                  onPress={handleProvision}
+                  style={({ pressed }) => [
+                    styles.saveButton,
+                    { backgroundColor: colors.primary },
+                    (loading || pressed) && styles.pressed,
+                  ]}>
+                  <Text style={styles.saveText}>{loading ? 'Creating...' : 'Issue Access'}</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -391,18 +736,19 @@ const styles = StyleSheet.create({
   profileInitials: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
   profileMain: { flex: 1, gap: 3 },
   profileName: { fontSize: 17, fontWeight: '800' },
-  profileRole: { fontSize: 10 },
+  profileRole: { fontSize: 11 },
   verified: {
     alignSelf: 'flex-start',
     height: 24,
     borderRadius: 5,
+    borderWidth: 1,
     marginTop: 5,
     paddingHorizontal: 7,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
   },
-  verifiedText: { fontSize: 8, fontWeight: '800' },
+  verifiedText: { fontSize: 9, fontWeight: '800' },
   editButton: { height: 36, borderRadius: 6, borderWidth: 1, paddingHorizontal: 13, justifyContent: 'center' },
   editText: { fontSize: 10, fontWeight: '800' },
   settingsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.three },
@@ -424,7 +770,7 @@ const styles = StyleSheet.create({
   settingDetail: { fontSize: 8, lineHeight: 12 },
   section: { gap: Spacing.three },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  sectionTitle: { fontSize: 17, fontWeight: '800' },
+  sectionTitle: { fontSize: 16, fontWeight: '800' },
   sectionSubtitle: { fontSize: 10, marginTop: 2 },
   inviteButton: {
     height: 38,
@@ -435,25 +781,24 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   inviteText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
-  accessNotice: { borderRadius: 6, padding: 10, fontSize: 10, lineHeight: 15 },
   teamList: { borderRadius: 8, borderWidth: 1, overflow: 'hidden' },
-  teamRow: { minHeight: 72, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 11 },
-  teamAvatar: { width: 37, height: 37, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  teamRow: { minHeight: 64, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  teamAvatar: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   teamInitials: { fontSize: 10, fontWeight: '800' },
   teamMain: { flex: 1, gap: 2 },
-  teamName: { fontSize: 11, fontWeight: '800' },
-  teamRole: { fontSize: 9 },
+  teamName: { fontSize: 12, fontWeight: '800' },
+  teamRole: { fontSize: 10 },
   accessBadge: { height: 24, borderRadius: 5, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
-  accessText: { fontSize: 8, fontWeight: '800' },
+  accessText: { fontSize: 9, fontWeight: '800' },
   audit: { minHeight: 76, borderRadius: 8, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11 },
   auditMain: { flex: 1, gap: 3 },
   auditTitle: { fontSize: 11, fontWeight: '800' },
   auditText: { fontSize: 9, lineHeight: 13 },
-  signOut: { minHeight: 42, borderRadius: 6, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  signOutText: { fontSize: 11, fontWeight: '800' },
+  signOut: { minHeight: 44, borderRadius: 6, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  signOutText: { fontSize: 12, fontWeight: '800' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(10, 19, 16, 0.55)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  modalTitle: { fontSize: 20, fontWeight: '800' },
+  modalTitle: { fontSize: 18, fontWeight: '800' },
   closeButton: { width: 34, height: 34, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
   formLabel: { fontSize: 10, fontWeight: '700' },
   editorModal: { width: '100%', maxWidth: 440, borderRadius: 8, padding: 20, gap: 16 },
@@ -466,5 +811,81 @@ const styles = StyleSheet.create({
   cancelText: { fontSize: 11, fontWeight: '800' },
   saveButton: { flex: 1, height: 44, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
   saveText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  lockedNotice: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  lockedNoticeTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  lockedNoticeDesc: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+  },
+  errorText: {
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  },
+  roleChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  roleChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  roleChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  successSlip: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    gap: 8,
+  },
+  successSlipTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  successSlipDesc: {
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  passwordBox: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginVertical: 4,
+  },
+  passwordText: {
+    fontSize: 16,
+    fontWeight: '800',
+    fontFamily: 'monospace',
+    letterSpacing: 1,
+  },
+  successNotice: {
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 15,
+  },
   pressed: { opacity: 0.65 },
 });
