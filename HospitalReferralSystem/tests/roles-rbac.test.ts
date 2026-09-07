@@ -65,4 +65,42 @@ describe('RBAC & Role Definitions Test Suite', () => {
       assert.ok(creds.phone.length >= 8, `Phone number invalid for ${role}`);
     }
   });
+
+  describe('Referral System RBAC Permissions', () => {
+    it('restricts referral operations exclusively to hospital_admin, specialist, and system_admin', async () => {
+      const { canAccessReferrals, REFERRAL_AUTHORIZED_ROLES } = await import(
+        '../src/constants/roles.ts'
+      );
+
+      assert.deepEqual(REFERRAL_AUTHORIZED_ROLES, [
+        'hospital_admin',
+        'specialist',
+        'system_admin',
+      ]);
+
+      // Authorized roles
+      assert.strictEqual(canAccessReferrals('specialist'), true);
+      assert.strictEqual(canAccessReferrals('hospital_admin'), true);
+      assert.strictEqual(canAccessReferrals('system_admin'), true);
+
+      // Unauthorized roles
+      assert.strictEqual(canAccessReferrals('patient'), false);
+      assert.strictEqual(canAccessReferrals('pcp'), false);
+      assert.strictEqual(canAccessReferrals('referral_coordinator'), false);
+      assert.strictEqual(canAccessReferrals('lab_technician'), false);
+      assert.strictEqual(canAccessReferrals('pharmacist'), false);
+      assert.strictEqual(canAccessReferrals(null), false);
+      assert.strictEqual(canAccessReferrals(undefined), false);
+    });
+
+    it('identifies system_admin as having nationwide network oversight', async () => {
+      const { isSystemAdminRole } = await import('../src/constants/roles.ts');
+
+      assert.strictEqual(isSystemAdminRole('system_admin'), true);
+      assert.strictEqual(isSystemAdminRole('hospital_admin'), false);
+      assert.strictEqual(isSystemAdminRole('specialist'), false);
+      assert.strictEqual(isSystemAdminRole('patient'), false);
+      assert.strictEqual(isSystemAdminRole('pcp'), false);
+    });
+  });
 });

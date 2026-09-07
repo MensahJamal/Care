@@ -2,10 +2,13 @@ import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
+import { useReferrals } from '@/context/referral-context';
 
 export default function AppTabs() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const { referrals } = useReferrals();
+  const pendingCount = referrals.filter((r) => r.status === 'Pending').length;
 
   return (
     <NativeTabs
@@ -26,7 +29,9 @@ export default function AppTabs() {
       <NativeTabs.Trigger name="referrals">
         <NativeTabs.Trigger.Label>Referrals</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="arrow.left.arrow.right" md="swap_horiz" />
-        <NativeTabs.Trigger.Badge>2</NativeTabs.Trigger.Badge>
+        {pendingCount > 0 ? (
+          <NativeTabs.Trigger.Badge>{String(pendingCount)}</NativeTabs.Trigger.Badge>
+        ) : null}
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="resources">
         <NativeTabs.Trigger.Label>Capacity</NativeTabs.Trigger.Label>
