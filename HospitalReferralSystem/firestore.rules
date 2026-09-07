@@ -57,8 +57,9 @@ service cloud.firestore {
     // ── Users & RBAC Directory ────────────────────────────────────────────────
     match /users/{userId} {
       allow read: if signedIn() && (request.auth.uid == userId || isHospitalAdmin());
-      allow create: if signedIn() && request.auth.uid == userId && (
-        request.resource.data.role == 'patient' || isHospitalAdmin()
+      allow create: if signedIn() && (
+        (request.auth.uid == userId && request.resource.data.role == 'patient') ||
+        isHospitalAdmin()
       );
       allow update: if signedIn() && (
         (
@@ -68,7 +69,11 @@ service cloud.firestore {
           request.resource.data.facilityId == resource.data.facilityId &&
           request.resource.data.facilityName == resource.data.facilityName
         ) ||
-        isHospitalAdmin()
+        (
+          isHospitalAdmin() &&
+          // Hospital admins cannot promote themselves or anyone else to system_admin
+          (request.resource.data.role != 'system_admin' || isSystemAdmin())
+        )
       );
       allow delete: if isSystemAdmin();
     }
@@ -178,8 +183,13 @@ service cloud.firestore {
     // ── Roster slots ──────────────────────────────────────────────────────────
     match /rosterSlots/{slotId} {
       allow read: if signedIn();
-      allow create, update: if isHospitalAdmin() || ownFacility(
-        get(/databases/$(database)/documents/specialists/$(resource.data.specialistId)).data.facilityId
+      allow create: if isHospitalAdmin() || ownFacility(
+        get(/databases/$(database)/documents/specialists/$(request.resource.data.specialistId)).data.facilityId
+      );
+      allow update: if isHospitalAdmin() || ownFacility(
+        get(/databases/$(database)/documents/specialists/$(
+          request.resource.data.specialistId != null ? request.resource.data.specialistId : resource.data.specialistId
+        )).data.facilityId
       );
       allow delete: if isHospitalAdmin();
     }

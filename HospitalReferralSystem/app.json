@@ -8,7 +8,10 @@
     "scheme": "carelink",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow CareLink to access your camera to scan hospital referral QR codes."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -31,6 +34,12 @@
           "backgroundColor": "#0B6B58",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow CareLink to access your camera to scan hospital referral QR codes."
         }
       ],
       "expo-image",

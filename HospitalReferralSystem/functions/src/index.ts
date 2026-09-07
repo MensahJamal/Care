@@ -20,10 +20,18 @@ const otpSecret = defineSecret('OTP_SECRET');
 
 function getOtpSecretKey(): string {
   try {
-    return otpSecret.value();
+    const val = otpSecret.value();
+    if (val) return val;
   } catch {
-    return process.env.OTP_SECRET || 'carelink-secure-otp-salt-secret-production-key-v1';
+    // Falls through to process.env or emulator check
   }
+  if (process.env.OTP_SECRET) {
+    return process.env.OTP_SECRET;
+  }
+  if (process.env.FUNCTIONS_EMULATOR || process.env.NODE_ENV !== 'production') {
+    return 'carelink-local-emulator-otp-salt-key';
+  }
+  throw new Error('Missing required secret: OTP_SECRET must be configured in production.');
 }
 
 function hashOtp(code: string) {

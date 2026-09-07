@@ -94,7 +94,15 @@ function formatTimestamp(value: unknown, fallback: string) {
 
 // ─── Map helpers ──────────────────────────────────────────────────────────────
 
-function mapReferral(id: string, data: DocumentData): Referral {
+function mapReferral(id: string, data: DocumentData, observerFacilityId?: string): Referral {
+  let direction: Referral['direction'] = data.direction ?? 'sent';
+  if (observerFacilityId && observerFacilityId !== 'ALL') {
+    if (data.toFacilityId === observerFacilityId) {
+      direction = 'incoming';
+    } else if (data.fromFacilityId === observerFacilityId) {
+      direction = 'sent';
+    }
+  }
   return {
     id,
     patient: data.patient ?? '',
@@ -107,8 +115,9 @@ function mapReferral(id: string, data: DocumentData): Referral {
     toFacilityId: data.toFacilityId,
     time: formatTimestamp(data.createdAt, data.time ?? 'Recently'),
     status: data.status ?? 'Pending',
-    direction: data.direction ?? 'sent',
+    direction,
     contact: data.contact ?? '',
+    transferPin: data.transferPin,
   };
 }
 
@@ -146,6 +155,7 @@ export function subscribeToReferrals(
   facilityId: string | undefined,
   onData: (referrals: Referral[]) => void,
   onError: (error: Error) => void,
+  observerFacilityId?: string,
 ): Unsubscribe {
   const q = facilityId && facilityId !== 'ALL'
     ? query(
@@ -156,7 +166,7 @@ export function subscribeToReferrals(
 
   return onSnapshot(
     q,
-    (snapshot) => onData(snapshot.docs.map((item) => mapReferral(item.id, item.data()))),
+    (snapshot) => onData(snapshot.docs.map((item) => mapReferral(item.id, item.data(), observerFacilityId ?? facilityId))),
     onError,
   );
 }

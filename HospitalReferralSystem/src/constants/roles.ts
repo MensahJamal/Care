@@ -225,3 +225,24 @@ export const ALL_ROLES: AppRole[] = [
   'lab_technician',
   'pharmacist',
 ];
+
+/**
+ * Only Hospital Administrators and Specialists are authorized to create,
+ * scan, accept, or reject patient referrals.
+ * System Administrators oversee the full nationwide network.
+ */
+export const REFERRAL_AUTHORIZED_ROLES: AppRole[] = [
+  'hospital_admin',
+  'specialist',
+  'system_admin',
+];
+
+export function canAccessReferrals(role?: AppRole | string | null): boolean {
+  if (!role) return false;
+  return REFERRAL_AUTHORIZED_ROLES.includes(role as AppRole);
+}
+
+export function isSystemAdminRole(role?: AppRole | string | null): boolean {
+  return role === 'system_admin';
+}
+

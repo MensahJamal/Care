@@ -4,26 +4,32 @@ import { Pressable, StyleSheet, Switch, Text, useColorScheme, View } from 'react
 import { AppIcon } from '@/components/ui/app-icon';
 import { Screen } from '@/components/ui/screen';
 import { Colors, Spacing } from '@/constants/theme';
+import { useAuth } from '@/context/auth-context';
 import { HospitalResource, useReferrals } from '@/context/referral-context';
-
-
 
 export default function ResourcesScreen() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const { profile } = useAuth();
   const { resources, updateBeds, specialists, updateSpecialistStatus } = useReferrals();
   const [showAvailableOnly, setShowAvailableOnly] = useState(false);
 
-  const ownFacility = resources[0] ?? {
-    id: 'kbth',
-    name: 'Korle Bu Teaching Hospital',
-    distance: 'Your facility',
-    beds: 0,
-    totalBeds: 0,
-    specialists: 0,
-    specialties: [],
-    lastUpdated: 'Live',
-  };
+  const ownFacility =
+    resources.find(
+      (r: HospitalResource) =>
+        (profile?.facilityId && r.id.toLowerCase() === profile.facilityId.toLowerCase()) ||
+        (profile?.facilityName && r.name.toLowerCase().includes(profile.facilityName.toLowerCase())),
+    ) ??
+    resources[0] ?? {
+      id: profile?.facilityId || 'kbth',
+      name: profile?.facilityName || 'Korle Bu Teaching Hospital',
+      distance: 'Your facility',
+      beds: 0,
+      totalBeds: 0,
+      specialists: 0,
+      specialties: [],
+      lastUpdated: 'Live',
+    };
   const visible = showAvailableOnly
     ? resources.filter((resource: HospitalResource) => resource.beds >= 10)
     : resources;

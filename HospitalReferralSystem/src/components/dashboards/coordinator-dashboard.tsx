@@ -28,10 +28,11 @@ export function CoordinatorDashboard() {
   const inTransit = referrals.filter((r: Referral) => r.status === 'In transit');
 
   function handleVerifyOtp() {
-    if (otpCode.trim() === '7892' || otpCode.trim().length === 4) {
-      setVerificationResult('OTP Validated: Patient AM-10942 identity verified for emergency intake.');
+    const trimmed = otpCode.trim();
+    if (/^\d{6}$/.test(trimmed)) {
+      setVerificationResult(`OTP Validated: Code ${trimmed} verified for incoming emergency intake.`);
     } else {
-      setVerificationResult('Invalid OTP code. Please re-check with dispatch ambulance.');
+      setVerificationResult('Invalid format. Enter a 6-digit confirmation code or Transfer PIN.');
     }
   }
 
@@ -101,7 +102,7 @@ export function CoordinatorDashboard() {
               Intake Handover OTP Verification
             </Text>
             <Text style={[styles.cardSub, { color: colors.textSecondary }]}>
-              Enter the 4-digit code provided by the transferring paramedic to confirm handover
+              Enter the 6-digit code or Transfer PIN provided by the transferring paramedic to confirm handover
             </Text>
           </View>
         </View>
@@ -110,7 +111,7 @@ export function CoordinatorDashboard() {
           <TextInput
             value={otpCode}
             onChangeText={setOtpCode}
-            placeholder="e.g. 7892"
+            placeholder="e.g. 482910"
             placeholderTextColor={colors.textSecondary}
             maxLength={6}
             keyboardType="number-pad"
