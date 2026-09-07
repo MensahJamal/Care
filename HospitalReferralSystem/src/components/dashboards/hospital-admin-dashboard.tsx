@@ -81,13 +81,19 @@ export function HospitalAdminDashboard() {
   const { profile, registerProvisionedAccount } = useAuth();
   const { resources, specialists, updateBeds } = useReferrals();
 
-  const ownFacility = resources[0] || {
-    id: 'kbth',
-    name: 'Korle Bu Teaching Hospital',
-    beds: 24,
-    totalBeds: 180,
-    specialists: 12,
-  };
+  const ownFacility =
+    resources.find(
+      (r) =>
+        (profile?.facilityId && r.id.toLowerCase() === profile.facilityId.toLowerCase()) ||
+        (profile?.facilityName && r.name.toLowerCase().includes(profile.facilityName.toLowerCase())),
+    ) ||
+    resources[0] || {
+      id: profile?.facilityId || 'kbth',
+      name: profile?.facilityName || 'Korle Bu Teaching Hospital',
+      beds: 24,
+      totalBeds: 180,
+      specialists: 12,
+    };
 
   const [bedsCount, setBedsCount] = useState(ownFacility.beds);
   const [provisionList, setProvisionList] = useState<ProvisionedStaff[]>(initialProvisioned);

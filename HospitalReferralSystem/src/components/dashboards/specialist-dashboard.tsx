@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import {
+  ActivityIndicator,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   useColorScheme,
   View,
 } from 'react-native';
@@ -11,6 +14,8 @@ import { AppIcon } from '@/components/ui/app-icon';
 import { Colors, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
 import { Referral, useReferrals } from '@/context/referral-context';
+import { isFirebaseConfigured } from '@/lib/firebase';
+import { callVerifyOtp, getConfirmationRequestByReferral } from '@/lib/firestore';
 import { RoleSwitcherBanner } from './role-switcher-banner';
 
 export function SpecialistDashboard() {
@@ -22,12 +27,57 @@ export function SpecialistDashboard() {
   const [onCallStatus, setOnCallStatus] = useState<'On Call' | 'In Surgery' | 'Rounding'>('On Call');
   const selectedWard = 'Cardiology ICU Bay 2';
 
+  const [pendingAccept, setPendingAccept] = useState<Referral | null>(null);
+  const [otpOpen, setOtpOpen] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+
   const incomingPending = referrals.filter(
     (r: Referral) => r.direction === 'incoming' && r.status === 'Pending',
   );
 
-  async function handleAccept(id: string) {
-    await decideReferral(id, 'Accepted');
+  function handleAccept(referral: Referral) {
+    setPendingAccept(referral);
+    setOtpCode('');
+    setOtpError(null);
+    setOtpOpen(true);
+  }
+
+  async function submitOtp() {
+    if (!pendingAccept) return;
+    const trimmed = otpCode.trim();
+    if (!/^\d{6}$/.test(trimmed)) {
+      setOtpError('Enter a valid 6-digit confirmation code or Transfer PIN.');
+      return;
+    }
+    setOtpLoading(true);
+    setOtpError(null);
+    try {
+      if (isFirebaseConfigured) {
+        const isTransferPinMatch = pendingAccept.transferPin && trimmed === pendingAccept.transferPin;
+        if (!isTransferPinMatch) {
+          const req = await getConfirmationRequestByReferral(pendingAccept.id);
+          if (!req) {
+            setOtpError('No confirmation request found. Enter the verified Transfer PIN from the QR referral.');
+            return;
+          }
+          const res = await callVerifyOtp(req.id, trimmed);
+          if (!res.verified) {
+            setOtpError('Incorrect confirmation code. Check SMS, email, or Transfer PIN.');
+            return;
+          }
+        }
+      }
+      await decideReferral(pendingAccept.id, 'Accepted');
+      setOtpOpen(false);
+      setPendingAccept(null);
+      setOtpCode('');
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'Verification failed.');
+    } finally {
+      setOtpLoading(false);
+    }
   }
 
   async function handleReject(id: string) {
@@ -205,7 +255,7 @@ export function SpecialistDashboard() {
                     </Pressable>
 
                     <Pressable
-                      onPress={() => handleAccept(ref.id)}
+                      onPress={() => handleAccept(ref)}
                       style={({ pressed }) => [
                         styles.acceptBtn,
                         { backgroundColor: colors.primary },
@@ -221,6 +271,70 @@ export function SpecialistDashboard() {
           </View>
         )}
       </View>
+
+      {/* OTP Verification Modal */}
+      <Modal visible={otpOpen} animationType="fade" transparent onRequestClose={() => setOtpOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <AppIcon ios="checkmark.shield.fill" android="verified_user" color={colors.primary} size={20} />
+                <Text style={[styles.modalTitle, { color: colors.text }]}>Confirm Referral Acceptance</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Close"
+                onPress={() => setOtpOpen(false)}
+                style={[styles.closeButton, { backgroundColor: colors.backgroundElement }]}>
+                <AppIcon ios="xmark" android="close" color={colors.text} size={16} />
+              </Pressable>
+            </View>
+
+            <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>
+              Enter the 6-digit confirmation code delivered via SMS/Email or the patient Transfer PIN from the QR referral payload.
+            </Text>
+
+            {otpError ? (
+              <View style={[styles.otpErrorBox, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }]}>
+                <AppIcon ios="exclamationmark.circle.fill" android="error" color={colors.danger} size={16} />
+                <Text style={[styles.otpErrorText, { color: colors.danger }]}>{otpError}</Text>
+              </View>
+            ) : null}
+
+            <TextInput
+              value={otpCode}
+              onChangeText={setOtpCode}
+              placeholder="e.g. 482910"
+              placeholderTextColor={colors.textSecondary}
+              maxLength={6}
+              keyboardType="number-pad"
+              style={[
+                styles.otpInput,
+                { color: colors.text, borderColor: colors.border, backgroundColor: colors.background },
+              ]}
+            />
+
+            <View style={styles.modalActions}>
+              <Pressable onPress={() => setOtpOpen(false)} style={[styles.modalCancelBtn, { borderColor: colors.border }]}>
+                <Text style={[styles.modalCancelText, { color: colors.text }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={submitOtp}
+                disabled={otpLoading}
+                style={({ pressed }) => [
+                  styles.modalConfirmBtn,
+                  { backgroundColor: colors.primary },
+                  (pressed || otpLoading) && styles.pressed,
+                ]}>
+                {otpLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalConfirmText}>Verify & Accept</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -457,5 +571,99 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 440,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 20,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  closeButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  otpErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  otpErrorText: {
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  },
+  otpInput: {
+    height: 48,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 4,
+  },
+  modalCancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  modalConfirmBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 120,
+  },
+  modalConfirmText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });

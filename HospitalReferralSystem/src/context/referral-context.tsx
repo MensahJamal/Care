@@ -30,6 +30,7 @@ export type Referral = {
   status: ReferralStatus;
   direction: ReferralDirection;
   contact: string;
+  transferPin?: string;
 };
 
 export type HospitalResource = {
@@ -61,6 +62,7 @@ const initialReferrals: Referral[] = [
     status: 'Pending',
     direction: 'incoming',
     contact: '+233 24 555 0138',
+    transferPin: '482910',
   },
   {
     id: 'RF-2047',
@@ -74,6 +76,7 @@ const initialReferrals: Referral[] = [
     status: 'Pending',
     direction: 'incoming',
     contact: 'referrals@temageneral.org',
+    transferPin: '591823',
   },
   {
     id: 'RF-2043',
@@ -192,6 +195,7 @@ type ReferralContextValue = {
   error: string | null;
   decideReferral: (id: string, status: 'Accepted' | 'Rejected') => Promise<void>;
   addReferral: (input: Pick<Referral, 'patient' | 'reason' | 'priority' | 'to' | 'contact'>) => Promise<boolean>;
+  receiveReferral: (referral: Omit<Referral, 'direction' | 'time'> & { time?: string; direction?: ReferralDirection }) => Promise<void>;
   updateBeds: (id: string, beds: number) => Promise<void>;
   updateSpecialistStatus: (id: string, isOnCall: boolean) => Promise<void>;
 };
@@ -229,6 +233,7 @@ export function ReferralProvider({ children }: PropsWithChildren) {
         setError(nextError.message);
         setLoading(false);
       },
+      profile?.facilityId,
     );
     const resourceUnsubscribe = subscribeToResources(
       setResources,
@@ -297,6 +302,41 @@ export function ReferralProvider({ children }: PropsWithChildren) {
           ...current,
         ]);
         return false;
+      },
+
+      receiveReferral: async (data) => {
+        const uniqueSuffix = `${Date.now().toString().slice(-4)}${Math.floor(10 + Math.random() * 90)}`;
+        const fallbackId = `RF-${uniqueSuffix}`;
+        const finalReferral: Referral = {
+          ...data,
+          id: data.id || fallbackId,
+          patientId: data.patientId || `PT-${uniqueSuffix}`,
+          time: data.time || 'Just now',
+          direction: data.direction ?? 'incoming',
+          transferPin: data.transferPin,
+        };
+
+        if (isFirebaseConfigured) {
+          await createReferral({
+            patient: finalReferral.patient,
+            patientId: finalReferral.patientId,
+            reason: finalReferral.reason,
+            priority: finalReferral.priority,
+            from: finalReferral.from,
+            to: finalReferral.to,
+            fromFacilityId: finalReferral.fromFacilityId ?? 'KBTH-01',
+            toFacilityId: profile?.facilityId ?? 'KBTH-01',
+            status: finalReferral.status,
+            direction: finalReferral.direction,
+            contact: finalReferral.contact,
+          });
+          return;
+        }
+
+        setReferrals((current) => [
+          finalReferral,
+          ...current.filter((r) => r.id !== finalReferral.id),
+        ]);
       },
 
       updateBeds: async (id, beds) => {
