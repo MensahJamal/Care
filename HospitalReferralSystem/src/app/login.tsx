@@ -16,6 +16,7 @@ import { AppIcon } from '@/components/ui/app-icon';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 import { ALL_ROLES, AppRole, ROLE_DEFINITIONS } from '@/constants/roles';
 import { useAuth } from '@/context/auth-context';
+import { clearRememberedEmail, getRememberedEmail, saveRememberedEmail } from '@/lib/storage';
 
 export default function LoginScreen() {
   const scheme = useColorScheme();
@@ -25,10 +26,11 @@ export default function LoginScreen() {
   const [selectedRole, setSelectedRole] = useState<AppRole>('pcp');
   const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
 
-  // Form fields - clean and empty by default
-  const [email, setEmail] = useState('');
+  // Form fields - initialize remembered identifier lazily without cascading renders
+  const [email, setEmail] = useState(() => getRememberedEmail() || '');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [rememberEmail, setRememberEmail] = useState(() => Boolean(getRememberedEmail()));
 
   // UI state
   const [showPassword, setShowPassword] = useState(false);
@@ -52,9 +54,10 @@ export default function LoginScreen() {
     setSelectedRole(targetRole);
     const targetMeta = ROLE_DEFINITIONS[targetRole];
     setEmail(targetMeta.demoCredentials.email);
-    setPassword('demo1234');
+    // Security best practice: Never auto-populate passwords in client forms
+    setPassword('');
     setFormError(null);
-    setInfoMessage(`Loaded credentials for ${targetMeta.title}`);
+    setInfoMessage(`Loaded ${targetMeta.title} account ID. Please enter password.`);
   }
 
   async function handleSubmit() {
@@ -127,6 +130,11 @@ export default function LoginScreen() {
     setSubmitting(true);
     try {
       await signIn(cleanEmail, password, selectedRole);
+      if (rememberEmail) {
+        saveRememberedEmail(cleanEmail);
+      } else {
+        clearRememberedEmail();
+      }
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Sign in failed. Please check your credentials.');
     } finally {
@@ -251,7 +259,7 @@ export default function LoginScreen() {
                 <View style={styles.demoAccordionHeaderLeft}>
                   <AppIcon ios="bolt.shield.fill" android="bolt" color={colors.primary} size={15} />
                   <Text style={[styles.demoAccordionTitle, { color: colors.text }]}>
-                    Demo Testing Accounts (1-Tap Fill)
+                    Academic Demo & Defense Accounts (Quick-Select)
                   </Text>
                 </View>
                 <AppIcon
@@ -265,7 +273,7 @@ export default function LoginScreen() {
               {showDemoPicker && (
                 <View style={styles.demoAccordionBody}>
                   <Text style={[styles.demoAccordionSub, { color: colors.textSecondary }]}>
-                    Tap a role to load verified testing credentials (Default password: demo1234):
+                    Select a verified role identity for defense testing. Pre-fills email; password entry is required:
                   </Text>
                   <View style={styles.demoChipsGrid}>
                     {ALL_ROLES.map((roleKey) => {
@@ -410,6 +418,29 @@ export default function LoginScreen() {
                   </Pressable>
                 </View>
               </View>
+            )}
+
+            {/* Safe Remember My Email Option (OWASP Compliant: Identifier Only) */}
+            {mode === 'signin' && (
+              <Pressable
+                onPress={() => setRememberEmail((prev) => !prev)}
+                style={styles.rememberRow}>
+                <View
+                  style={[
+                    styles.checkbox,
+                    {
+                      borderColor: rememberEmail ? colors.primary : colors.border,
+                      backgroundColor: rememberEmail ? colors.primary : 'transparent',
+                    },
+                  ]}>
+                  {rememberEmail && (
+                    <AppIcon ios="checkmark" android="check" color="#FFFFFF" size={11} />
+                  )}
+                </View>
+                <Text style={[styles.rememberText, { color: colors.textSecondary }]}>
+                  Remember my email ID on this device (Password required)
+                </Text>
+              </Pressable>
             )}
 
             {/* Primary Submit Button */}
@@ -749,6 +780,24 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     lineHeight: 15,
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginVertical: 2,
+  },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rememberText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   pressed: {
     opacity: 0.7,

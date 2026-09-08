@@ -20,22 +20,25 @@ interface UserRecord {
   id: string;
   name: string;
   email: string;
-  tempPassword?: string;
   role: AppRole;
   facility: string;
   lastLogin: string;
   status: 'Active' | 'Suspended';
 }
 
+interface IssuedCredentialSlip extends UserRecord {
+  tempPassword: string;
+}
+
 const initialUsers: UserRecord[] = [
-  { id: 'u1', name: 'Ama Serwaa Owusu', email: 'patient@carelink.local', tempPassword: 'demo1234', role: 'patient', facility: 'Korle Bu Teaching Hospital', lastLogin: '10 min ago', status: 'Active' },
-  { id: 'u2', name: 'Dr. Kwame Addo', email: 'pcp@carelink.local', tempPassword: 'demo1234', role: 'pcp', facility: 'Ridge Hospital PolyClinic', lastLogin: 'Just now', status: 'Active' },
-  { id: 'u3', name: 'Dr. Naa Lartey', email: 'specialist@carelink.local', tempPassword: 'demo1234', role: 'specialist', facility: 'Korle Bu Teaching Hospital', lastLogin: '25 min ago', status: 'Active' },
-  { id: 'u4', name: 'Kofi Manu', email: 'coordinator@carelink.local', tempPassword: 'demo1234', role: 'referral_coordinator', facility: 'Korle Bu Central Triage', lastLogin: '1 hr ago', status: 'Active' },
-  { id: 'u5', name: 'Administrator Mensah', email: 'hospadmin@carelink.local', tempPassword: 'demo1234', role: 'hospital_admin', facility: 'Korle Bu Teaching Hospital', lastLogin: '3 hrs ago', status: 'Active' },
-  { id: 'u6', name: 'Akosua Darko', email: 'lab@carelink.local', tempPassword: 'demo1234', role: 'lab_technician', facility: 'Korle Bu Pathology & Diagnostics', lastLogin: '45 min ago', status: 'Active' },
-  { id: 'u7', name: 'Pharm. David Osei', email: 'pharmacy@carelink.local', tempPassword: 'demo1234', role: 'pharmacist', facility: 'Korle Bu Central Pharmacy', lastLogin: '2 hrs ago', status: 'Active' },
-  { id: 'u8', name: 'Emmanuel Asare', email: 'sysadmin@carelink.local', tempPassword: 'demo1234', role: 'system_admin', facility: 'National Health Exchange', lastLogin: 'Active Now', status: 'Active' },
+  { id: 'u1', name: 'Ama Serwaa Owusu', email: 'patient@carelink.local', role: 'patient', facility: 'Korle Bu Teaching Hospital', lastLogin: '10 min ago', status: 'Active' },
+  { id: 'u2', name: 'Dr. Kwame Addo', email: 'pcp@carelink.local', role: 'pcp', facility: 'Ridge Hospital PolyClinic', lastLogin: 'Just now', status: 'Active' },
+  { id: 'u3', name: 'Dr. Naa Lartey', email: 'specialist@carelink.local', role: 'specialist', facility: 'Korle Bu Teaching Hospital', lastLogin: '25 min ago', status: 'Active' },
+  { id: 'u4', name: 'Kofi Manu', email: 'coordinator@carelink.local', role: 'referral_coordinator', facility: 'Korle Bu Central Triage', lastLogin: '1 hr ago', status: 'Active' },
+  { id: 'u5', name: 'Administrator Mensah', email: 'hospadmin@carelink.local', role: 'hospital_admin', facility: 'Korle Bu Teaching Hospital', lastLogin: '3 hrs ago', status: 'Active' },
+  { id: 'u6', name: 'Akosua Darko', email: 'lab@carelink.local', role: 'lab_technician', facility: 'Korle Bu Pathology & Diagnostics', lastLogin: '45 min ago', status: 'Active' },
+  { id: 'u7', name: 'Pharm. David Osei', email: 'pharmacy@carelink.local', role: 'pharmacist', facility: 'Korle Bu Central Pharmacy', lastLogin: '2 hrs ago', status: 'Active' },
+  { id: 'u8', name: 'Emmanuel Asare', email: 'sysadmin@carelink.local', role: 'system_admin', facility: 'National Health Exchange', lastLogin: 'Active Now', status: 'Active' },
 ];
 
 const auditEvents = [
@@ -53,7 +56,7 @@ export function SystemAdminDashboard() {
   const [users, setUsers] = useState<UserRecord[]>(initialUsers);
   const [selectedTab, setSelectedTab] = useState<'users' | 'audit' | 'nodes'>('users');
   const [modalOpen, setModalOpen] = useState(false);
-  const [issuedSlip, setIssuedSlip] = useState<UserRecord | null>(null);
+  const [issuedSlip, setIssuedSlip] = useState<IssuedCredentialSlip | null>(null);
 
   // Form state
   const [fullName, setFullName] = useState('');
@@ -71,7 +74,6 @@ export function SystemAdminDashboard() {
       id: `u-${Date.now().toString().slice(-4)}`,
       name: fullName.trim(),
       email: cleanEmail,
-      tempPassword,
       role: selectedRole,
       facility: facility.trim(),
       lastLogin: 'Never (Pending Activation)',
@@ -105,7 +107,6 @@ export function SystemAdminDashboard() {
       });
       if (result.tempPassword) {
         finalTempPassword = result.tempPassword;
-        newUser.tempPassword = finalTempPassword;
       }
     } catch {
       // Graceful fallback in offline demo mode
@@ -285,7 +286,7 @@ export function SystemAdminDashboard() {
                       {u.facility} · Status: {u.status}
                     </Text>
                     <Text style={[styles.userCreds, { color: colors.textSecondary }]}>
-                      Login: <Text style={{ fontWeight: '700', color: colors.text }}>{u.email}</Text> · Password: <Text style={{ fontWeight: '700', color: colors.text }}>{u.tempPassword || 'demo1234'}</Text>
+                      Login ID: <Text style={{ fontWeight: '700', color: colors.text }}>{u.email}</Text> · Auth: <Text style={{ fontWeight: '700', color: colors.primary }}>Provisioned</Text>
                     </Text>
                   </View>
 

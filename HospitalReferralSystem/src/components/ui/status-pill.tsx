@@ -7,13 +7,15 @@ export function StatusPill({ status }: { status: ReferralStatus }) {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
   const tone =
-    status === 'Accepted'
-      ? [colors.primarySoft, colors.primary]
-      : status === 'Rejected'
-        ? [colors.dangerSoft, colors.danger]
-        : status === 'In transit'
-          ? [colors.infoSoft, colors.info]
-          : [colors.accentSoft, colors.accent];
+    status === 'Arrived'
+      ? ['#DCFCE7', '#15803D']
+      : status === 'Accepted'
+        ? [colors.primarySoft, colors.primary]
+        : status === 'Rejected'
+          ? [colors.dangerSoft, colors.danger]
+          : status === 'In transit'
+            ? [colors.infoSoft, colors.info]
+            : [colors.accentSoft, colors.accent];
 
   return (
     <View style={[styles.pill, { backgroundColor: tone[0] }]}>

@@ -56,7 +56,11 @@ service cloud.firestore {
 
     // ── Users & RBAC Directory ────────────────────────────────────────────────
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isHospitalAdmin());
+      allow read: if signedIn() && (
+        request.auth.uid == userId ||
+        isHospitalAdmin() ||
+        (isClinicalStaff() && resource.data.facilityId == userFacilityId())
+      );
       allow create: if signedIn() && (
         (request.auth.uid == userId && request.resource.data.role == 'patient') ||
         isHospitalAdmin()

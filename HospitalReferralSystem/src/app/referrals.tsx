@@ -53,7 +53,7 @@ export default function ReferralsScreen() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
   const { referrals, decideReferral, addReferral, receiveReferral } = useReferrals();
-  const { profile, signIn } = useAuth();
+  const { profile, signOut } = useAuth();
   const [direction, setDirection] = useState<ReferralDirection>('incoming');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Referral | null>(null);
@@ -165,9 +165,8 @@ export default function ReferralsScreen() {
       <RestrictedReferralAccessScreen
         currentRole={currentRole}
         userFacility={profile?.facilityName || 'Assigned Facility'}
-        onSwitchRole={async (role) => {
-          const creds = ROLE_DEFINITIONS[role].demoCredentials;
-          await signIn(creds.email, 'demo1234');
+        onSwitchRole={async () => {
+          await signOut();
         }}
       />
     );
@@ -1378,7 +1377,7 @@ function RestrictedReferralAccessScreen({
 
         <View style={styles.switchTestingSection}>
           <Text style={[styles.switchTestingLabel, { color: colors.textSecondary }]}>
-            SWITCH TO AN AUTHORIZED ROLE TO TEST REFERRALS:
+            AUTHENTICATE AS AN AUTHORIZED ROLE TO ACCESS REFERRALS:
           </Text>
           <View style={{ gap: 8, width: '100%' }}>
             <Pressable
@@ -1390,7 +1389,7 @@ function RestrictedReferralAccessScreen({
               ]}>
               <AppIcon ios="heart.text.square.fill" android="local_hospital" color={colors.primary} size={16} />
               <Text style={[styles.roleSwitchButtonText, { color: colors.primary }]}>
-                Switch to Specialist (Dr. Naa Lartey)
+                Sign In as Specialist (Dr. Naa Lartey)
               </Text>
             </Pressable>
 
@@ -1403,7 +1402,7 @@ function RestrictedReferralAccessScreen({
               ]}>
               <AppIcon ios="building.2.fill" android="domain" color={colors.info} size={16} />
               <Text style={[styles.roleSwitchButtonText, { color: colors.info }]}>
-                Switch to Hospital Admin (Admin Mensah)
+                Sign In as Hospital Admin (Admin Mensah)
               </Text>
             </Pressable>
 
@@ -1416,7 +1415,7 @@ function RestrictedReferralAccessScreen({
               ]}>
               <AppIcon ios="shield.lefthalf.filled" android="admin_panel_settings" color={colors.danger} size={16} />
               <Text style={[styles.roleSwitchButtonText, { color: colors.danger }]}>
-                Switch to System Admin (Emmanuel Asare - Network Oversight)
+                Sign In as System Admin (Emmanuel Asare)
               </Text>
             </Pressable>
           </View>

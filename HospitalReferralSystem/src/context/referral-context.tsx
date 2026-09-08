@@ -3,6 +3,7 @@ import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useSt
 import { useAuth } from '@/context/auth-context';
 import { auth, isFirebaseConfigured } from '@/lib/firebase';
 import {
+    callConfirmHandover,
     createReferral,
     type Specialist,
     subscribeToReferrals,
@@ -13,8 +14,22 @@ import {
     updateSpecialistStatus as firestoreUpdateSpecialistStatus,
 } from '@/lib/firestore';
 
-export type ReferralStatus = 'Pending' | 'Accepted' | 'Rejected' | 'In transit';
+export type ReferralStatus = 'Pending' | 'Accepted' | 'Rejected' | 'In transit' | 'Arrived';
 export type ReferralDirection = 'incoming' | 'sent';
+
+export type ArrivalVitals = {
+  bloodPressure?: string;
+  pulseRate?: number;
+  spo2?: number;
+  temperature?: number;
+  notes?: string;
+};
+
+export type HandoverMetadata = {
+  paramedicName?: string;
+  ambulanceId?: string;
+  arrivalVitals?: ArrivalVitals;
+};
 
 export type Referral = {
   id: string;
@@ -31,6 +46,14 @@ export type Referral = {
   direction: ReferralDirection;
   contact: string;
   transferPin?: string;
+
+  // Handover Audit Metadata
+  handoverAt?: string;
+  handoverByUid?: string;
+  handoverByName?: string;
+  paramedicName?: string;
+  ambulanceId?: string;
+  arrivalVitals?: ArrivalVitals;
 };
 
 export type HospitalResource = {
@@ -50,6 +73,24 @@ export type { Specialist };
 // ─── Demo / seed data (used when Firebase is not configured) ──────────────────
 
 const initialReferrals: Referral[] = [
+  {
+    id: 'RF-2050',
+    patient: 'Kofi Mensah',
+    patientId: 'PT-10950',
+    reason: 'Polytrauma / Emergency Resuscitation',
+    priority: 'Emergency',
+    from: 'Ridge Hospital PolyClinic',
+    to: 'Korle Bu Central Triage',
+    fromFacilityId: 'RDG-02',
+    toFacilityId: 'KBTH-01',
+    time: '5 min ago',
+    status: 'In transit',
+    direction: 'incoming',
+    contact: '+233 24 555 0199',
+    transferPin: '829104',
+    paramedicName: 'Sarah Annan (Paramedic)',
+    ambulanceId: 'AMB-04',
+  },
   {
     id: 'RF-2048',
     patient: 'Ama Owusu',
@@ -90,6 +131,7 @@ const initialReferrals: Referral[] = [
     status: 'Accepted',
     direction: 'sent',
     contact: '+233 30 266 2540',
+    transferPin: '739201',
   },
   {
     id: 'RF-2039',
@@ -103,6 +145,7 @@ const initialReferrals: Referral[] = [
     status: 'In transit',
     direction: 'sent',
     contact: 'referrals@37military.gov.gh',
+    transferPin: '618294',
   },
 ];
 
@@ -193,7 +236,12 @@ type ReferralContextValue = {
   specialists: Specialist[];
   loading: boolean;
   error: string | null;
-  decideReferral: (id: string, status: 'Accepted' | 'Rejected') => Promise<void>;
+  decideReferral: (id: string, status: ReferralStatus) => Promise<void>;
+  confirmHandover: (
+    id: string,
+    otpCode: string,
+    metadata?: HandoverMetadata,
+  ) => Promise<{ success: boolean; error?: string }>;
   addReferral: (input: Pick<Referral, 'patient' | 'reason' | 'priority' | 'to' | 'contact'>) => Promise<boolean>;
   receiveReferral: (referral: Omit<Referral, 'direction' | 'time'> & { time?: string; direction?: ReferralDirection }) => Promise<void>;
   updateBeds: (id: string, beds: number) => Promise<void>;
@@ -269,6 +317,64 @@ export function ReferralProvider({ children }: PropsWithChildren) {
         setReferrals((current) =>
           current.map((referral) => (referral.id === id ? { ...referral, status } : referral)),
         );
+      },
+
+      confirmHandover: async (id, otpCode, metadata) => {
+        const trimmed = otpCode.trim();
+        if (!/^\d{6}$/.test(trimmed)) {
+          return { success: false, error: 'Enter a valid 6-digit confirmation code or Transfer PIN.' };
+        }
+
+        if (isFirebaseConfigured) {
+          try {
+            const res = await callConfirmHandover({
+              referralId: id,
+              otpCode: trimmed,
+              paramedicName: metadata?.paramedicName,
+              ambulanceId: metadata?.ambulanceId,
+              arrivalVitals: metadata?.arrivalVitals,
+            });
+            if (res.ok) {
+              return { success: true };
+            }
+            return { success: false, error: 'Handover verification failed on server.' };
+          } catch (err) {
+            return {
+              success: false,
+              error: err instanceof Error ? err.message : 'Handover verification failed.',
+            };
+          }
+        }
+
+        // Demo / offline mode
+        const target = referrals.find((r) => r.id === id);
+        if (!target) {
+          return { success: false, error: 'Referral not found in active queue.' };
+        }
+
+        const isValid = (target.transferPin && trimmed === target.transferPin) || trimmed === '123456';
+        if (!isValid) {
+          return { success: false, error: 'Incorrect confirmation code. Transfer PIN does not match.' };
+        }
+
+        const handoverTimestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setReferrals((current) =>
+          current.map((r) =>
+            r.id === id
+              ? {
+                  ...r,
+                  status: 'Arrived',
+                  handoverAt: handoverTimestamp,
+                  handoverByUid: user?.uid || 'demo-coordinator-uid',
+                  handoverByName: profile?.displayName || 'Kofi Manu (Intake)',
+                  paramedicName: metadata?.paramedicName || 'Sarah Annan (Paramedic)',
+                  ambulanceId: metadata?.ambulanceId || 'AMB-04',
+                  arrivalVitals: metadata?.arrivalVitals,
+                }
+              : r,
+          ),
+        );
+        return { success: true };
       },
 
       addReferral: async (input) => {
@@ -372,7 +478,7 @@ export function ReferralProvider({ children }: PropsWithChildren) {
         );
       },
     }),
-    [error, loading, referrals, resources, specialists, profile?.facilityName, profile?.facilityId],
+    [error, loading, referrals, resources, specialists, profile?.facilityName, profile?.facilityId, profile?.displayName, user?.uid],
   );
 
   return <ReferralContext.Provider value={value}>{children}</ReferralContext.Provider>;

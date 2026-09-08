@@ -280,6 +280,41 @@ async function readProfile(firebaseUser: User): Promise<AppUserProfile> {
 
 // Registry for dynamically provisioned demo accounts (persisted across reloads on web via sessionStorage)
 const DEMO_REGISTRY_KEY = 'carelink_provisioned_demo_registry';
+const DEMO_OVERRIDES_KEY = 'carelink_demo_profile_overrides';
+
+function loadDemoProfileOverrides(): Partial<Record<AppRole, Partial<AppUserProfile>>> {
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      const raw = window.sessionStorage.getItem(DEMO_OVERRIDES_KEY);
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return {};
+}
+
+function persistDemoProfileOverrides(overrides: Partial<Record<AppRole, Partial<AppUserProfile>>>) {
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      window.sessionStorage.setItem(DEMO_OVERRIDES_KEY, JSON.stringify(overrides));
+    } catch {
+      // Ignore storage errors
+    }
+  }
+}
+
+const demoProfileOverrides = loadDemoProfileOverrides();
+for (const [roleKey, roleOverrides] of Object.entries(demoProfileOverrides)) {
+  if (roleKey in DEMO_PROFILES && roleOverrides) {
+    DEMO_PROFILES[roleKey as AppRole] = {
+      ...DEMO_PROFILES[roleKey as AppRole],
+      ...roleOverrides,
+    };
+  }
+}
 
 function loadProvisionedDemoRegistry(): Map<string, { profile: AppUserProfile; password: string }> {
   const map = new Map<string, { profile: AppUserProfile; password: string }>();
@@ -576,6 +611,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const updated = { ...profile, ...sanitizedUpdates };
     setProfile(updated);
+
+    // Sync in-memory demo profile and sessionStorage for cross-role and persistent visibility
+    if (profile.role && profile.role in DEMO_PROFILES) {
+      DEMO_PROFILES[profile.role] = { ...DEMO_PROFILES[profile.role], ...sanitizedUpdates };
+      demoProfileOverrides[profile.role] = {
+        ...demoProfileOverrides[profile.role],
+        ...sanitizedUpdates,
+      };
+      persistDemoProfileOverrides(demoProfileOverrides);
+    }
+
+    if (profile.email && provisionedDemoRegistry.has(profile.email.trim().toLowerCase())) {
+      const existing = provisionedDemoRegistry.get(profile.email.trim().toLowerCase())!;
+      provisionedDemoRegistry.set(profile.email.trim().toLowerCase(), {
+        ...existing,
+        profile: updated,
+      });
+      persistProvisionedDemoRegistry(provisionedDemoRegistry);
+    }
 
     if (isFirebaseConfigured && db && user) {
       try {

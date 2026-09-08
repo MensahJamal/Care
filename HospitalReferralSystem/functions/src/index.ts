@@ -219,6 +219,109 @@ export const verifyReferralOtp = onCall({ region: 'us-central1', secrets: [otpSe
   return verification;
 });
 
+export const confirmHandover = onCall({ region: 'us-central1', secrets: [otpSecret] }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Intake staff must be authenticated to confirm patient handover.');
+  }
+
+  const callerDoc = await db.collection('users').doc(request.auth.uid).get();
+  if (!callerDoc.exists) {
+    throw new HttpsError('permission-denied', 'Caller user profile not found.');
+  }
+  const callerData = callerDoc.data();
+  const callerRole = callerData?.role;
+  const authorizedRoles = ['referral_coordinator', 'specialist', 'hospital_admin', 'administrator', 'system_admin'];
+  if (!authorizedRoles.includes(callerRole)) {
+    throw new HttpsError('permission-denied', 'Only authorized referral coordinators, intake staff, and specialists can confirm handovers.');
+  }
+
+  const { referralId, otpCode, paramedicName, ambulanceId, arrivalVitals } = request.data ?? {};
+  if (typeof referralId !== 'string' || typeof otpCode !== 'string' || !/^\d{6}$/.test(otpCode.trim())) {
+    throw new HttpsError('invalid-argument', 'Valid referralId and 6-digit handover OTP required.');
+  }
+
+  const trimmedCode = otpCode.trim();
+  const referralRef = db.collection('referrals').doc(referralId);
+
+  return await db.runTransaction(async (transaction) => {
+    const refSnap = await transaction.get(referralRef);
+    if (!refSnap.exists) {
+      throw new HttpsError('not-found', 'Referral document not found.');
+    }
+    const referral = refSnap.data() ?? {};
+    if (referral.status !== 'In transit' && referral.status !== 'Accepted') {
+      throw new HttpsError('failed-precondition', `Cannot complete handover for referral in status: ${referral.status}`);
+    }
+
+    let isCodeValid = false;
+    // Fast-path: Transfer PIN match from offline QR transfer card
+    if (referral.transferPin && trimmedCode === referral.transferPin) {
+      isCodeValid = true;
+    } else {
+      const reqQuery = await db.collection('confirmationRequests')
+        .where('referralId', '==', referralId)
+        .limit(1)
+        .get();
+
+      if (!reqQuery.empty) {
+        const reqDoc = reqQuery.docs[0];
+        const reqData = reqDoc.data();
+        const attempts = Number(reqData.otpAttempts ?? 0);
+        const expiresAt = reqData.otpExpiresAt as Timestamp | undefined;
+
+        if (attempts >= 5) {
+          throw new HttpsError('resource-exhausted', 'Too many failed verification attempts. Request a new code.');
+        }
+        if (expiresAt && expiresAt.toMillis() < Date.now()) {
+          throw new HttpsError('deadline-exceeded', 'The transfer confirmation code has expired.');
+        }
+        if (typeof reqData.otpHash === 'string' && matchesOtp(trimmedCode, reqData.otpHash)) {
+          isCodeValid = true;
+          transaction.update(reqDoc.ref, {
+            status: 'verified',
+            otpStatus: 'verified',
+            verifiedBy: request.auth!.uid,
+            verifiedAt: FieldValue.serverTimestamp(),
+          });
+        } else {
+          transaction.update(reqDoc.ref, { otpAttempts: attempts + 1 });
+        }
+      }
+    }
+
+    if (!isCodeValid) {
+      throw new HttpsError('invalid-argument', 'The handover confirmation code or Transfer PIN is incorrect.');
+    }
+
+    // Atomically transition referral to 'Arrived' with immutable audit fields
+    transaction.update(referralRef, {
+      status: 'Arrived',
+      handoverAt: FieldValue.serverTimestamp(),
+      handoverByUid: request.auth!.uid,
+      handoverByName: callerData?.displayName || 'Intake Officer',
+      paramedicName: typeof paramedicName === 'string' && paramedicName.trim() ? paramedicName.trim() : 'Paramedic',
+      ambulanceId: typeof ambulanceId === 'string' && ambulanceId.trim() ? ambulanceId.trim() : 'Emergency Transport',
+      arrivalVitals: arrivalVitals || null,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    // Write audit log entry
+    const auditRef = db.collection('auditLogs').doc();
+    transaction.set(auditRef, {
+      event: 'PATIENT_HANDOVER_CONFIRMED',
+      referralId,
+      patientId: referral.patientId || null,
+      receivingFacilityId: callerData?.facilityId || null,
+      verifiedByUid: request.auth!.uid,
+      verifiedByName: callerData?.displayName || 'Intake Officer',
+      timestamp: FieldValue.serverTimestamp(),
+      authType: 'DUAL_TOKEN_OTP',
+    });
+
+    return { ok: true, status: 'Arrived' as const };
+  });
+});
+
 export const provisionStaffUser = onCall({ region: 'us-central1' }, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'You must be signed in to provision user accounts.');

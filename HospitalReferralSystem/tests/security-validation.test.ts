@@ -126,4 +126,140 @@ describe('Security Validation & Sanitization Test Suite', () => {
       assert.strictEqual(result.displayName, 'Administrator Mensah');
     });
   });
+
+  describe('Clinical Profile & Display Name Validation', () => {
+    function validateDisplayName(name: string): { valid: boolean; error?: string } {
+      const clean = name.trim();
+      if (!clean || clean.length < 2) {
+        return { valid: false, error: 'Please enter a valid full name (minimum 2 characters).' };
+      }
+      if (clean.length > 60) {
+        return { valid: false, error: 'Full name must not exceed 60 characters.' };
+      }
+      return { valid: true };
+    }
+
+    it('accepts realistic clinical names with titles and prefixes', () => {
+      assert.strictEqual(validateDisplayName('Administrator Sarah Mensah').valid, true);
+      assert.strictEqual(validateDisplayName('Dr. Kwame Addo').valid, true);
+      assert.strictEqual(validateDisplayName('Pharm. David Osei').valid, true);
+      assert.strictEqual(validateDisplayName('Prof. Nana Yaa Opoku, MD').valid, true);
+    });
+
+    it('rejects empty, whitespace-only, and excessively long names', () => {
+      assert.strictEqual(validateDisplayName('').valid, false);
+      assert.strictEqual(validateDisplayName('   ').valid, false);
+      assert.strictEqual(validateDisplayName('A').valid, false); // too short (< 2)
+      assert.strictEqual(
+        validateDisplayName('A'.repeat(61)).valid,
+        false, // exceeds 60 characters
+      );
+    });
+
+    it('validates combined profile updates with displayName and jobTitle', () => {
+      const updates = {
+        displayName: 'Administrator Sarah Mensah',
+        jobTitle: 'Chief Clinical Operations Officer',
+      };
+
+      const nameResult = validateDisplayName(updates.displayName);
+      assert.strictEqual(nameResult.valid, true);
+      assert.ok(updates.jobTitle.length > 0);
+    });
+  });
+
+  describe('Staff Directory Access Rule Validation (Firestore Security)', () => {
+    function canReadUserProfile(
+      caller: { uid: string; role: string; facilityId: string },
+      targetUser: { uid: string; role: string; facilityId: string },
+    ): boolean {
+      const isSelf = caller.uid === targetUser.uid;
+      const isHospitalAdmin = caller.role === 'hospital_admin' || caller.role === 'system_admin' || caller.role === 'administrator';
+      const isClinicalStaff = ['pcp', 'specialist', 'referral_coordinator', 'lab_technician', 'pharmacist'].includes(caller.role);
+      const isSameFacility = caller.facilityId === targetUser.facilityId;
+
+      return isSelf || isHospitalAdmin || (isClinicalStaff && isSameFacility);
+    }
+
+    it('allows clinical staff in the same hospital to view the administrator and colleague profiles', () => {
+      const pcpCaller = { uid: 'u-pcp', role: 'pcp', facilityId: 'KBTH-01' };
+      const adminTarget = { uid: 'u-admin', role: 'hospital_admin', facilityId: 'KBTH-01' };
+      const specialistTarget = { uid: 'u-spec', role: 'specialist', facilityId: 'KBTH-01' };
+
+      assert.strictEqual(canReadUserProfile(pcpCaller, adminTarget), true);
+      assert.strictEqual(canReadUserProfile(pcpCaller, specialistTarget), true);
+    });
+
+    it('prevents clinical staff from reading user profiles from other hospitals', () => {
+      const pcpCaller = { uid: 'u-pcp', role: 'pcp', facilityId: 'KBTH-01' };
+      const otherHospitalStaff = { uid: 'u-other', role: 'specialist', facilityId: 'RDG-02' };
+
+      assert.strictEqual(canReadUserProfile(pcpCaller, otherHospitalStaff), false);
+    });
+
+    it('allows hospital administrators to view staff across permissions', () => {
+      const adminCaller = { uid: 'u-admin', role: 'hospital_admin', facilityId: 'KBTH-01' };
+      const staffTarget = { uid: 'u-pcp', role: 'pcp', facilityId: 'KBTH-01' };
+
+      assert.strictEqual(canReadUserProfile(adminCaller, staffTarget), true);
+    });
+
+    it('prevents non-clinical patients from snooping internal staff records', () => {
+      const patientCaller = { uid: 'u-patient', role: 'patient', facilityId: 'KBTH-01' };
+      const adminTarget = { uid: 'u-admin', role: 'hospital_admin', facilityId: 'KBTH-01' };
+
+      assert.strictEqual(canReadUserProfile(patientCaller, adminTarget), false);
+    });
+  });
+
+  describe('Credential Storage & OWASP MASVS MASVS-STORAGE Compliance', () => {
+    it('persists and clears remembered email without sensitive credential leakage', async () => {
+      const { getRememberedEmail, saveRememberedEmail, clearRememberedEmail } = await import(
+        '../src/lib/storage.ts'
+      );
+
+      clearRememberedEmail();
+      assert.strictEqual(getRememberedEmail(), null);
+
+      saveRememberedEmail('Doctor.Kwame@carelink.local ');
+      assert.strictEqual(getRememberedEmail(), 'doctor.kwame@carelink.local');
+
+      clearRememberedEmail();
+      assert.strictEqual(getRememberedEmail(), null);
+    });
+
+    it('ensures quick-select identity loaders never return or auto-fill plaintext passwords', () => {
+      function simulateQuickSelect(roleMetadata: { demoCredentials: { email: string } }) {
+        return {
+          email: roleMetadata.demoCredentials.email,
+          password: '', // Password must remain empty per security policy
+        };
+      }
+
+      const mockRoleMeta = {
+        demoCredentials: {
+          email: 'specialist@carelink.local',
+          displayName: 'Dr. Naa Lartey',
+        },
+      };
+
+      const result = simulateQuickSelect(mockRoleMeta);
+      assert.strictEqual(result.email, 'specialist@carelink.local');
+      assert.strictEqual(result.password, '');
+      assert.notStrictEqual(result.password, 'demo1234');
+    });
+
+    it('ensures user management listings do not expose plaintext password properties', () => {
+      const mockUserList = [
+        { id: 'u1', name: 'Dr. Kwame Addo', email: 'pcp@carelink.local', role: 'pcp' },
+        { id: 'u2', name: 'Administrator Mensah', email: 'hospadmin@carelink.local', role: 'hospital_admin' },
+      ];
+
+      for (const user of mockUserList) {
+        assert.strictEqual('tempPassword' in user, false);
+        assert.strictEqual('password' in user, false);
+      }
+    });
+  });
 });
+

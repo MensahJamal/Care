@@ -23,7 +23,7 @@ interface ProvisionedStaff {
   role: AppRole;
   jobTitle: string;
   email: string;
-  tempPassword: string;
+  tempPassword?: string;
   dateIssued: string;
 }
 
@@ -34,7 +34,6 @@ const initialProvisioned: ProvisionedStaff[] = [
     role: 'specialist',
     jobTitle: 'Senior Consultant Cardiologist',
     email: 'specialist@carelink.local',
-    tempPassword: 'demo1234',
     dateIssued: 'Active Credential',
   },
   {
@@ -43,7 +42,6 @@ const initialProvisioned: ProvisionedStaff[] = [
     role: 'pcp',
     jobTitle: 'Primary Care Physician / SMO',
     email: 'pcp@carelink.local',
-    tempPassword: 'demo1234',
     dateIssued: 'Active Credential',
   },
   {
@@ -52,7 +50,6 @@ const initialProvisioned: ProvisionedStaff[] = [
     role: 'referral_coordinator',
     jobTitle: 'Referral & Intake Coordinator',
     email: 'coordinator@carelink.local',
-    tempPassword: 'demo1234',
     dateIssued: 'Active Credential',
   },
   {
@@ -61,7 +58,6 @@ const initialProvisioned: ProvisionedStaff[] = [
     role: 'lab_technician',
     jobTitle: 'Lead Medical Lab Scientist',
     email: 'lab@carelink.local',
-    tempPassword: 'demo1234',
     dateIssued: 'Active Credential',
   },
   {
@@ -70,7 +66,6 @@ const initialProvisioned: ProvisionedStaff[] = [
     role: 'pharmacist',
     jobTitle: 'Clinical Specialist Pharmacist',
     email: 'pharmacy@carelink.local',
-    tempPassword: 'demo1234',
     dateIssued: 'Active Credential',
   },
 ];

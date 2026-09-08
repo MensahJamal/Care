@@ -15,19 +15,39 @@ import { AppIcon } from '@/components/ui/app-icon';
 import { Screen } from '@/components/ui/screen';
 import { Colors, Spacing } from '@/constants/theme';
 import { ALL_ROLES, AppRole, ROLE_DEFINITIONS } from '@/constants/roles';
-import { useAuth } from '@/context/auth-context';
+import { DEMO_PROFILES, useAuth } from '@/context/auth-context';
 import { useRbac } from '@/hooks/use-rbac';
 import { RoleSwitcherBanner } from '@/components/dashboards/role-switcher-banner';
 import { subscribeToUsers, callProvisionStaffUser } from '@/lib/firestore';
 
-const demoTeam = [
-  { initials: 'NA', name: 'Dr. Naa Lartey', role: 'Consultant Cardiologist', access: 'Specialist' },
-  { initials: 'KA', name: 'Dr. Kwame Addo', role: 'Senior Medical Officer', access: 'PCP Doctor' },
-  { initials: 'KM', name: 'Kofi Manu', role: 'Intake Coordinator', access: 'Intake Staff' },
-  { initials: 'AD', name: 'Akosua Darko', role: 'Lead Lab Scientist', access: 'Lab Tech' },
-  { initials: 'DO', name: 'Pharm. David Osei', role: 'Clinical Pharmacist', access: 'Pharmacist' },
-  { initials: 'AM', name: 'Administrator Mensah', role: 'Clinical Operations Director', access: 'Hospital Admin' },
-];
+function getDynamicDemoTeam() {
+  const staffRoles: AppRole[] = [
+    'specialist',
+    'pcp',
+    'referral_coordinator',
+    'lab_technician',
+    'pharmacist',
+    'hospital_admin',
+  ];
+  return staffRoles.map((roleKey) => {
+    const prof = DEMO_PROFILES[roleKey];
+    const meta = ROLE_DEFINITIONS[roleKey] || ROLE_DEFINITIONS.pcp;
+    const name = prof?.displayName || meta.demoCredentials.displayName;
+    const role = prof?.jobTitle || meta.demoCredentials.jobTitle;
+    const initials = name
+      .split(' ')
+      .map((part: string) => part[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+    return {
+      initials,
+      name,
+      role,
+      access: meta.shortTitle,
+    };
+  });
+}
 
 export default function AccountScreen() {
   const scheme = useColorScheme();
@@ -38,7 +58,7 @@ export default function AccountScreen() {
   const { roleMeta, isHospitalAdmin, isSystemAdmin } = useRbac();
   const [editor, setEditor] = useState<'profile' | 'facility' | 'contact' | 'notifications' | 'security' | null>(null);
   const [provisionOpen, setProvisionOpen] = useState(false);
-  const [teamList, setTeamList] = useState(demoTeam);
+  const [teamList, setTeamList] = useState(getDynamicDemoTeam);
 
   const canManageTeam = isHospitalAdmin || isSystemAdmin;
   const displayName = profile?.displayName || 'Clinical User';
@@ -130,7 +150,11 @@ export default function AccountScreen() {
           icon={{ ios: 'building.2', android: 'medical_services' }}
           title="Facility profile"
           description={profile?.facilityName ?? 'Assigned facility'}
-          detail={profile?.facilityId ? `${profile.facilityId} · Verified Node` : 'Facility not assigned'}
+          detail={
+            profile?.facilityId
+              ? `${profile.facilityId} · Admin: ${DEMO_PROFILES.hospital_admin?.displayName || 'Administrator Mensah'}`
+              : 'Facility not assigned'
+          }
         />
         <SettingCard
           onPress={() => setEditor('contact')}
@@ -246,6 +270,9 @@ export default function AccountScreen() {
           onClose={() => setEditor(null)}
           onSave={async (updates) => {
             await editProfile(updates);
+            if (!isFirebaseMode) {
+              setTeamList(getDynamicDemoTeam());
+            }
             setEditor(null);
           }}
         />
@@ -319,6 +346,7 @@ function AccountEditor({
 }) {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [jobTitle, setJobTitle] = useState(profile?.jobTitle ?? '');
   const [facilityName, setFacilityName] = useState(profile?.facilityName ?? '');
   const [facilityId, setFacilityId] = useState(profile?.facilityId ?? '');
@@ -342,9 +370,23 @@ function AccountEditor({
     setSaving(true);
     setSaveError(null);
     try {
+      if (section === 'profile') {
+        const cleanName = displayName.trim();
+        if (!cleanName || cleanName.length < 2) {
+          setSaveError('Please enter a valid full name (minimum 2 characters).');
+          setSaving(false);
+          return;
+        }
+        if (cleanName.length > 60) {
+          setSaveError('Full name must not exceed 60 characters.');
+          setSaving(false);
+          return;
+        }
+      }
+
       const updates =
         section === 'profile'
-          ? { jobTitle }
+          ? { displayName: displayName.trim(), jobTitle: jobTitle.trim() }
           : section === 'facility' && canManageFacility
             ? { facilityName, facilityId }
             : section === 'contact'
@@ -382,7 +424,18 @@ function AccountEditor({
           ) : null}
 
           {section === 'profile' ? (
-            <EditorField label="Job title" value={jobTitle} onChangeText={setJobTitle} colors={colors} />
+            <>
+              <EditorField
+                label="Full name / Display name"
+                value={displayName}
+                onChangeText={setDisplayName}
+                colors={colors}
+              />
+              <Text style={[styles.fieldHint, { color: colors.textSecondary }]}>
+                This name is visible to clinical colleagues, triage coordinators, and administrators across your facility.
+              </Text>
+              <EditorField label="Job title" value={jobTitle} onChangeText={setJobTitle} colors={colors} />
+            </>
           ) : null}
           {section === 'facility' ? (
             canManageFacility ? (
@@ -394,7 +447,10 @@ function AccountEditor({
               <View style={[styles.lockedNotice, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
                 <AppIcon ios="lock.shield.fill" android="security" color={colors.primary} size={20} />
                 <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={[styles.lockedNoticeTitle, { color: colors.text }]}>Facility Node is Locked</Text>
+                  <Text style={[styles.lockedNoticeTitle, { color: colors.text }]}>Facility Governance & Administrator</Text>
+                  <Text style={[styles.lockedNoticeDesc, { color: colors.textSecondary }]}>
+                    Hospital Administrator: {DEMO_PROFILES.hospital_admin?.displayName || 'Administrator Mensah'} ({DEMO_PROFILES.hospital_admin?.jobTitle || 'Director of Clinical Operations'})
+                  </Text>
                   <Text style={[styles.lockedNoticeDesc, { color: colors.textSecondary }]}>
                     Hospital facility assignment is cryptographically linked to your account node ({profile.facilityId}). Facility transfers must be executed by your Hospital Administrator or Super Admin.
                   </Text>
@@ -803,6 +859,7 @@ const styles = StyleSheet.create({
   formLabel: { fontSize: 10, fontWeight: '700' },
   editorModal: { width: '100%', maxWidth: 440, borderRadius: 8, padding: 20, gap: 16 },
   editorField: { gap: 6 },
+  fieldHint: { fontSize: 11, lineHeight: 15, marginTop: -8, marginBottom: 2 },
   editorInput: { height: 44, borderRadius: 6, borderWidth: 1, paddingHorizontal: 12, fontSize: 12 },
   switchRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   switchLabel: { flex: 1, fontSize: 12, fontWeight: '700' },

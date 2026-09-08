@@ -300,6 +300,32 @@ export async function callVerifyOtp(requestId: string, code: string) {
   return { verified: true };
 }
 
+export type HandoverCallInput = {
+  referralId: string;
+  otpCode: string;
+  paramedicName?: string;
+  ambulanceId?: string;
+  arrivalVitals?: {
+    bloodPressure?: string;
+    pulseRate?: number;
+    spo2?: number;
+    temperature?: number;
+    notes?: string;
+  };
+};
+
+export async function callConfirmHandover(input: HandoverCallInput) {
+  if (functions) {
+    const fn = httpsCallable<HandoverCallInput, { ok: boolean; status: ReferralStatus }>(
+      functions,
+      'confirmHandover',
+    );
+    const result = await fn(input);
+    return result.data;
+  }
+  return { ok: true, status: 'Arrived' as ReferralStatus };
+}
+
 export type ProvisionUserInput = {
   email: string;
   password?: string;
